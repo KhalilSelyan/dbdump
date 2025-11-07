@@ -1,0 +1,1234 @@
+import type { SchemaDiff, HealthMetrics, SyncDirections, SyncDirection } from './types';
+
+function calculateSyncDirections(diff: SchemaDiff): SyncDirections {
+  let sourceToTargetTables = 0;
+  let sourceToTargetColumns = 0;
+  let sourceToTargetModify = 0;
+
+  let targetToSourceTables = 0;
+  let targetToSourceColumns = 0;
+  let targetToSourceModify = 0;
+
+  // Tables only in source need to be created in target
+  sourceToTargetTables = diff.tablesOnlyInSource.length;
+
+  // Tables only in target need to be created in source
+  targetToSourceTables = diff.tablesOnlyInTarget.length;
+
+  // For common tables, count column changes
+  for (const table of diff.tablesInBoth) {
+    sourceToTargetColumns += table.columnsOnlyInSource.length;
+    sourceToTargetModify += table.columnsWithDifferences.length;
+
+    targetToSourceColumns += table.columnsOnlyInTarget.length;
+    // Modifications are counted in both directions
+    targetToSourceModify += table.columnsWithDifferences.length;
+  }
+
+  return {
+    sourceToTarget: {
+      tablesToCreate: sourceToTargetTables,
+      columnsToAdd: sourceToTargetColumns,
+      columnsToModify: sourceToTargetModify,
+    },
+    targetToSource: {
+      tablesToCreate: targetToSourceTables,
+      columnsToAdd: targetToSourceColumns,
+      columnsToModify: targetToSourceModify,
+    },
+  };
+}
+
+// Helper function to format column definition for SQL
+function formatColumnDefinition(col: ColumnInfo, includeDefault: boolean = true): string {
+  let colDef = `"${col.column_name}" `;
+
+  // Normalize data type (remove precision from integer types)
+  let dataType = col.data_type;
+
+  // Integer types should not have precision/scale
+  const integerTypes = ['smallint', 'integer', 'bigint', 'int2', 'int4', 'int8', 'smallserial', 'serial', 'bigserial'];
+  const isIntegerType = integerTypes.includes(dataType.toLowerCase());
+
+  // Add data type
+  colDef += dataType;
+
+  // Add length/precision only for non-integer types
+  if (!isIntegerType) {
+    if (col.character_maximum_length) {
+      colDef += `(${col.character_maximum_length})`;
+    } else if (col.numeric_precision && col.numeric_scale !== null && col.numeric_scale > 0) {
+      colDef += `(${col.numeric_precision}, ${col.numeric_scale})`;
+    } else if (col.numeric_precision && col.data_type.toLowerCase().includes('numeric')) {
+      colDef += `(${col.numeric_precision})`;
+    }
+  }
+
+  // Add NOT NULL
+  if (col.is_nullable === 'NO') {
+    colDef += ' NOT NULL';
+  }
+
+  // Add DEFAULT
+  if (includeDefault && col.column_default) {
+    colDef += ` DEFAULT ${col.column_default}`;
+  }
+
+  return colDef;
+}
+
+// Helper: Generate Extensions, ENUMs, and Functions SQL
+function generateExtensionsEnumsFunctionsSQL(
+  sourceMetadata: SchemaMetadata,
+  targetMetadata: SchemaMetadata
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- EXTENSIONS, ENUMS, AND FUNCTIONS\n`;
+  sql += `-- Foundation types and functions (no dependencies)\n`;
+  sql += `-- ============================================================\n\n`;
+
+  // Extensions
+  const sourceExtensions = new Set(sourceMetadata.extensions);
+  const targetExtensions = new Set(targetMetadata.extensions);
+  const missingExtensions = Array.from(sourceExtensions).filter(ext => !targetExtensions.has(ext));
+
+  if (missingExtensions.length > 0) {
+    sql += `-- Extensions\n`;
+    for (const ext of missingExtensions) {
+      sql += `CREATE EXTENSION IF NOT EXISTS "${ext}";\n`;
+    }
+    sql += `\n`;
+  }
+
+  // ENUM types
+  const sourceEnums = new Map(sourceMetadata.enums.map(e => [`${e.schema}.${e.name}`, e]));
+  const targetEnums = new Map(targetMetadata.enums.map(e => [`${e.schema}.${e.name}`, e]));
+  const missingEnums: EnumTypeInfo[] = [];
+
+  for (const [key, enumInfo] of sourceEnums) {
+    if (!targetEnums.has(key)) {
+      missingEnums.push(enumInfo);
+    }
+  }
+
+  if (missingEnums.length > 0) {
+    sql += `-- ENUM Types\n`;
+    for (const enumInfo of missingEnums) {
+      if (!enumInfo.values || !Array.isArray(enumInfo.values) || enumInfo.values.length === 0) {
+        sql += `-- WARNING: ENUM type ${enumInfo.schema}.${enumInfo.name} has no values, skipping\n\n`;
+        continue;
+      }
+
+      sql += `DO $$ BEGIN\n`;
+      sql += `  CREATE TYPE "${enumInfo.schema}"."${enumInfo.name}" AS ENUM (\n`;
+      sql += enumInfo.values.map(v => `    '${v.replace(/'/g, "''")}'`).join(',\n');
+      sql += `\n  );\n`;
+      sql += `EXCEPTION\n`;
+      sql += `  WHEN duplicate_object THEN null;\n`;
+      sql += `END $$;\n\n`;
+    }
+  }
+
+  // Functions
+  const sourceFunctions = new Map(sourceMetadata.functions.map(f => [`${f.schema}.${f.name}`, f]));
+  const targetFunctions = new Map(targetMetadata.functions.map(f => [`${f.schema}.${f.name}`, f]));
+  const missingFunctions: FunctionInfo[] = [];
+
+  for (const [key, funcInfo] of sourceFunctions) {
+    if (!targetFunctions.has(key)) {
+      missingFunctions.push(funcInfo);
+    }
+  }
+
+  if (missingFunctions.length > 0) {
+    sql += `-- Functions\n`;
+    for (const funcInfo of missingFunctions) {
+      sql += `${funcInfo.definition};\n\n`;
+    }
+  }
+
+  return sql || `-- No extensions, enums, or functions to create\n\n`;
+}
+
+// Helper: Generate Sequences SQL
+function generateSequencesSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- SEQUENCES\n`;
+  sql += `-- Sequences needed by table columns\n`;
+  sql += `-- ============================================================\n\n`;
+
+  const schemaMap = sourceMetadata.tables;
+  let hasSequences = false;
+
+  // Sequences from tables that don't exist in target
+  for (const tableRef of diff.tablesOnlyInSource) {
+    const tableKey = `${tableRef.schema}.${tableRef.table}`;
+    const tableInfo = schemaMap.get(tableKey);
+    if (!tableInfo || tableInfo.sequences.length === 0) continue;
+
+    hasSequences = true;
+    sql += `-- Sequences for table: ${tableRef.schema}.${tableRef.table}\n`;
+    for (const seq of tableInfo.sequences) {
+      sql += `CREATE SEQUENCE IF NOT EXISTS "${seq.sequence_schema}"."${seq.sequence_name}"\n`;
+      sql += `  AS ${seq.data_type}\n`;
+      sql += `  INCREMENT BY ${seq.increment}\n`;
+      sql += `  START WITH ${seq.start_value}\n`;
+      sql += `  MINVALUE ${seq.min_value}\n`;
+      sql += `  MAXVALUE ${seq.max_value}\n`;
+      sql += `  ${seq.cycle ? 'CYCLE' : 'NO CYCLE'};\n\n`;
+    }
+  }
+
+  return hasSequences ? sql : `-- No sequences to create\n\n`;
+}
+
+// Helper: Generate Tables SQL (columns only, no constraints/indexes/triggers)
+function generateTablesSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- TABLES\n`;
+  sql += `-- Table structures with columns only\n`;
+  sql += `-- ============================================================\n\n`;
+
+  const schemaMap = sourceMetadata.tables;
+  let hasTables = false;
+
+  for (const tableRef of diff.tablesOnlyInSource) {
+    const tableKey = `${tableRef.schema}.${tableRef.table}`;
+    const tableInfo = schemaMap.get(tableKey);
+    if (!tableInfo) continue;
+
+    hasTables = true;
+    sql += `-- Table: ${tableRef.schema}.${tableRef.table}\n`;
+    sql += `CREATE TABLE IF NOT EXISTS "${tableRef.schema}"."${tableRef.table}" (\n`;
+
+    const columnDefs: string[] = [];
+    for (const col of tableInfo.columns) {
+      columnDefs.push(`  ${formatColumnDefinition(col)}`);
+    }
+
+    sql += columnDefs.join(',\n');
+    sql += `\n);\n\n`;
+
+    // Set sequence ownership
+    if (tableInfo.sequences.length > 0) {
+      for (const seq of tableInfo.sequences) {
+        for (const col of tableInfo.columns) {
+          if (col.column_default?.includes(seq.sequence_name)) {
+            sql += `ALTER SEQUENCE "${seq.sequence_schema}"."${seq.sequence_name}" OWNED BY "${tableRef.schema}"."${tableRef.table}"."${col.column_name}";\n\n`;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Add missing columns to existing tables
+  for (const table of diff.tablesInBoth) {
+    if (table.columnsOnlyInSource.length > 0) {
+      hasTables = true;
+      sql += `-- Add columns to existing table: ${table.table_schema}.${table.table_name}\n`;
+      for (const col of table.columnsOnlyInSource) {
+        sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD COLUMN IF NOT EXISTS ${formatColumnDefinition(col)};\n`;
+      }
+      sql += `\n`;
+    }
+  }
+
+  return hasTables ? sql : `-- No tables to create or modify\n\n`;
+}
+
+// Helper: Generate Indexes SQL
+function generateIndexesSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- INDEXES\n`;
+  sql += `-- Primary keys and indexes (requires tables to exist)\n`;
+  sql += `-- ============================================================\n\n`;
+
+  const schemaMap = sourceMetadata.tables;
+  let hasIndexes = false;
+
+  // Indexes from new tables
+  for (const tableRef of diff.tablesOnlyInSource) {
+    const tableKey = `${tableRef.schema}.${tableRef.table}`;
+    const tableInfo = schemaMap.get(tableKey);
+    if (!tableInfo || tableInfo.indexes.length === 0) continue;
+
+    hasIndexes = true;
+    sql += `-- Indexes for table: ${tableRef.schema}.${tableRef.table}\n`;
+    for (const idx of tableInfo.indexes) {
+      if (idx.is_primary) {
+        sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD PRIMARY KEY (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+      } else {
+        const uniqueStr = idx.is_unique ? 'UNIQUE ' : '';
+        sql += `CREATE ${uniqueStr}INDEX IF NOT EXISTS "${idx.index_name}" ON "${tableRef.schema}"."${tableRef.table}" USING ${idx.index_type} (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+      }
+    }
+    sql += `\n`;
+  }
+
+  // Indexes for existing tables
+  for (const table of diff.tablesInBoth) {
+    if (table.indexesOnlyInSource.length > 0) {
+      hasIndexes = true;
+      sql += `-- Add indexes to existing table: ${table.table_schema}.${table.table_name}\n`;
+      for (const idx of table.indexesOnlyInSource) {
+        if (idx.is_primary) {
+          sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD PRIMARY KEY (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+        } else {
+          const uniqueStr = idx.is_unique ? 'UNIQUE ' : '';
+          sql += `CREATE ${uniqueStr}INDEX IF NOT EXISTS "${idx.index_name}" ON "${table.table_schema}"."${table.table_name}" USING ${idx.index_type} (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+        }
+      }
+      sql += `\n`;
+    }
+  }
+
+  return hasIndexes ? sql : `-- No indexes to create\n\n`;
+}
+
+// Helper: Generate Constraints and Foreign Keys SQL
+function generateConstraintsForeignKeysSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata,
+  isSourceToTarget: boolean = true
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- CONSTRAINTS AND FOREIGN KEYS\n`;
+  sql += `-- CHECK constraints and foreign keys (requires tables to exist)\n`;
+  sql += `-- ============================================================\n\n`;
+
+  const schemaMap = sourceMetadata.tables;
+  let hasConstraints = false;
+
+  // Constraints from new tables
+  for (const tableRef of diff.tablesOnlyInSource) {
+    const tableKey = `${tableRef.schema}.${tableRef.table}`;
+    const tableInfo = schemaMap.get(tableKey);
+    if (!tableInfo) continue;
+
+    const hasFKs = tableInfo.foreignKeys.length > 0;
+    const hasChecks = tableInfo.constraints.length > 0;
+
+    if (!hasFKs && !hasChecks) continue;
+
+    hasConstraints = true;
+    sql += `-- Constraints for table: ${tableRef.schema}.${tableRef.table}\n`;
+
+    // Foreign keys
+    for (const fk of tableInfo.foreignKeys) {
+      sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD CONSTRAINT "${fk.constraint_name}" `;
+      sql += `FOREIGN KEY ("${fk.column_name}") REFERENCES "${fk.foreign_table_schema}"."${fk.foreign_table_name}"("${fk.foreign_column_name}")`;
+      sql += ` ON DELETE ${fk.on_delete} ON UPDATE ${fk.on_update};\n`;
+    }
+
+    // Constraints (CHECK and UNIQUE)
+    for (const constraint of tableInfo.constraints) {
+      if (constraint.constraint_type === 'CHECK' && constraint.check_clause) {
+        const checkClause = constraint.check_clause.trim().startsWith('(')
+          ? constraint.check_clause
+          : `(${constraint.check_clause})`;
+        sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD CONSTRAINT "${constraint.constraint_name}" CHECK ${checkClause};\n`;
+      } else if (constraint.constraint_type === 'UNIQUE' && constraint.columns && Array.isArray(constraint.columns) && constraint.columns.length > 0) {
+        const columnList = constraint.columns.map(c => `"${c}"`).join(', ');
+        sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD CONSTRAINT "${constraint.constraint_name}" UNIQUE (${columnList});\n`;
+      }
+    }
+    sql += `\n`;
+  }
+
+  // Constraints for existing tables
+  for (const table of diff.tablesInBoth) {
+    const fksToAdd = isSourceToTarget ? table.foreignKeysOnlyInSource : table.foreignKeysOnlyInTarget;
+    const constraintsToAdd = isSourceToTarget ? table.constraintsOnlyInSource : table.constraintsOnlyInTarget;
+
+    const hasFKs = fksToAdd.length > 0;
+    const hasChecks = constraintsToAdd.length > 0;
+
+    if (!hasFKs && !hasChecks) continue;
+
+    hasConstraints = true;
+    sql += `-- Add constraints to existing table: ${table.table_schema}.${table.table_name}\n`;
+
+    // Foreign keys
+    for (const fk of fksToAdd) {
+      sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD CONSTRAINT "${fk.constraint_name}" `;
+      sql += `FOREIGN KEY ("${fk.column_name}") REFERENCES "${fk.foreign_table_schema}"."${fk.foreign_table_name}"("${fk.foreign_column_name}")`;
+      sql += ` ON DELETE ${fk.on_delete} ON UPDATE ${fk.on_update};\n`;
+    }
+
+    // Constraints (CHECK and UNIQUE)
+    for (const constraint of constraintsToAdd) {
+      if (constraint.constraint_type === 'CHECK' && constraint.check_clause) {
+        const checkClause = constraint.check_clause.trim().startsWith('(')
+          ? constraint.check_clause
+          : `(${constraint.check_clause})`;
+        sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD CONSTRAINT "${constraint.constraint_name}" CHECK ${checkClause};\n`;
+      } else if (constraint.constraint_type === 'UNIQUE' && constraint.columns && Array.isArray(constraint.columns) && constraint.columns.length > 0) {
+        const columnList = constraint.columns.map(c => `"${c}"`).join(', ');
+        sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD CONSTRAINT "${constraint.constraint_name}" UNIQUE (${columnList});\n`;
+      }
+    }
+    sql += `\n`;
+  }
+
+  return hasConstraints ? sql : `-- No constraints or foreign keys to create\n\n`;
+}
+
+// Helper: Generate Triggers SQL
+function generateTriggersSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata,
+  targetMetadata: SchemaMetadata
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- TRIGGERS\n`;
+  sql += `-- Triggers (requires tables and functions to exist)\n`;
+  sql += `-- ============================================================\n\n`;
+
+  const schemaMap = sourceMetadata.tables;
+  let hasTriggers = false;
+
+  // Triggers from new tables
+  for (const tableRef of diff.tablesOnlyInSource) {
+    const tableKey = `${tableRef.schema}.${tableRef.table}`;
+    const tableInfo = schemaMap.get(tableKey);
+    if (!tableInfo || tableInfo.triggers.length === 0) continue;
+
+    hasTriggers = true;
+    sql += `-- Triggers for table: ${tableRef.schema}.${tableRef.table}\n`;
+    for (const trigger of tableInfo.triggers) {
+      sql += `CREATE TRIGGER "${trigger.trigger_name}"\n`;
+      sql += `  ${trigger.action_timing} ${trigger.event_manipulation}\n`;
+      sql += `  ON "${tableRef.schema}"."${tableRef.table}"\n`;
+      sql += `  ${trigger.action_statement};\n\n`;
+    }
+  }
+
+  // Triggers for existing tables
+  for (const table of diff.tablesInBoth) {
+    const tableKey = `${table.table_schema}.${table.table_name}`;
+    const sourceTableInfo = sourceMetadata.tables.get(tableKey);
+    const targetTableInfo = targetMetadata.tables.get(tableKey);
+
+    if (!sourceTableInfo || !targetTableInfo) continue;
+
+    const targetTriggers = new Set(targetTableInfo.triggers.map(t => t.trigger_name));
+    const missingTriggers = sourceTableInfo.triggers.filter(t => !targetTriggers.has(t.trigger_name));
+
+    if (missingTriggers.length === 0) continue;
+
+    hasTriggers = true;
+    sql += `-- Add triggers to existing table: ${table.table_schema}.${table.table_name}\n`;
+    for (const trigger of missingTriggers) {
+      sql += `CREATE TRIGGER "${trigger.trigger_name}"\n`;
+      sql += `  ${trigger.action_timing} ${trigger.event_manipulation}\n`;
+      sql += `  ON "${table.table_schema}"."${table.table_name}"\n`;
+      sql += `  ${trigger.action_statement};\n\n`;
+    }
+  }
+
+  return hasTriggers ? sql : `-- No triggers to create\n\n`;
+}
+
+// Helper: Generate RLS Policies SQL
+function generatePoliciesSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata,
+  targetMetadata: SchemaMetadata
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- RLS POLICIES\n`;
+  sql += `-- Row Level Security policies (requires tables to exist)\n`;
+  sql += `-- ============================================================\n\n`;
+
+  const schemaMap = sourceMetadata.tables;
+  let hasPolicies = false;
+
+  // Policies from new tables
+  for (const tableRef of diff.tablesOnlyInSource) {
+    const tableKey = `${tableRef.schema}.${tableRef.table}`;
+    const tableInfo = schemaMap.get(tableKey);
+    if (!tableInfo || tableInfo.policies.length === 0) continue;
+
+    hasPolicies = true;
+    sql += `-- RLS policies for table: ${tableRef.schema}.${tableRef.table}\n`;
+    sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ENABLE ROW LEVEL SECURITY;\n\n`;
+
+    for (const policy of tableInfo.policies) {
+      const roles = Array.isArray(policy.roles) ? policy.roles : [];
+      const rolesStr = roles.length > 0 ? roles.join(', ') : 'public';
+
+      sql += `CREATE POLICY "${policy.policy_name}"\n`;
+      sql += `  ON "${tableRef.schema}"."${tableRef.table}"\n`;
+      sql += `  AS ${policy.permissive}\n`;
+      sql += `  FOR ${policy.cmd}\n`;
+      sql += `  TO ${rolesStr}\n`;
+      if (policy.qual) {
+        sql += `  USING (${policy.qual})\n`;
+      }
+      if (policy.with_check) {
+        sql += `  WITH CHECK (${policy.with_check})\n`;
+      }
+      sql += `;\n\n`;
+    }
+  }
+
+  // Policies for existing tables
+  for (const table of diff.tablesInBoth) {
+    const tableKey = `${table.table_schema}.${table.table_name}`;
+    const sourceTableInfo = sourceMetadata.tables.get(tableKey);
+    const targetTableInfo = targetMetadata.tables.get(tableKey);
+
+    if (!sourceTableInfo || !targetTableInfo) continue;
+
+    const targetPolicies = new Set(targetTableInfo.policies.map(p => p.policy_name));
+    const missingPolicies = sourceTableInfo.policies.filter(p => !targetPolicies.has(p.policy_name));
+
+    if (missingPolicies.length === 0) continue;
+
+    hasPolicies = true;
+    sql += `-- Add RLS policies to existing table: ${table.table_schema}.${table.table_name}\n`;
+    sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ENABLE ROW LEVEL SECURITY;\n\n`;
+
+    for (const policy of missingPolicies) {
+      const roles = Array.isArray(policy.roles) ? policy.roles : [];
+      const rolesStr = roles.length > 0 ? roles.join(', ') : 'public';
+
+      sql += `CREATE POLICY "${policy.policy_name}"\n`;
+      sql += `  ON "${table.table_schema}"."${table.table_name}"\n`;
+      sql += `  AS ${policy.permissive}\n`;
+      sql += `  FOR ${policy.cmd}\n`;
+      sql += `  TO ${rolesStr}\n`;
+      if (policy.qual) {
+        sql += `  USING (${policy.qual})\n`;
+      }
+      if (policy.with_check) {
+        sql += `  WITH CHECK (${policy.with_check})\n`;
+      }
+      sql += `;\n\n`;
+    }
+  }
+
+  return hasPolicies ? sql : `-- No RLS policies to create\n\n`;
+}
+
+// Generate full database schema SQL (for cloning entire database)
+function generateFullDatabaseSQL(
+  metadata: SchemaMetadata,
+  dbLabel: string
+): SplitMigrationFiles {
+  const header = `-- Full Schema Dump: ${dbLabel}\n-- Generated: ${new Date().toLocaleString()}\n-- This file contains the complete schema for recreating the database\n\n`;
+
+  // For full dump, we need to create ALL tables, not just differences
+  // So we construct a fake "diff" that includes everything
+  const allTables: TableReference[] = Array.from(metadata.tables.values()).map(t => ({
+    schema: t.table_schema,
+    table: t.table_name
+  }));
+
+  const fullDiff: SchemaDiff = {
+    tablesOnlyInSource: allTables,
+    tablesOnlyInTarget: [],
+    tablesInBoth: []
+  };
+
+  // Empty target metadata since we're dumping everything from source
+  const emptyMetadata: SchemaMetadata = {
+    tables: new Map(),
+    enums: [],
+    extensions: [],
+    functions: []
+  };
+
+  return {
+    '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(metadata, emptyMetadata),
+    '2-sequences': header + generateSequencesSQL(fullDiff, metadata),
+    '3-tables': header + generateTablesSQL(fullDiff, metadata),
+    '4-indexes': header + generateIndexesSQL(fullDiff, metadata),
+    '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(fullDiff, metadata),
+    '6-triggers': header + generateTriggersSQL(fullDiff, metadata, emptyMetadata),
+    '7-policies': header + generatePoliciesSQL(fullDiff, metadata, emptyMetadata),
+  };
+}
+
+// Generate split migration SQL files (7 files per direction)
+interface SplitMigrationFiles {
+  '1-extensions-enums-functions': string;
+  '2-sequences': string;
+  '3-tables': string;
+  '4-indexes': string;
+  '5-constraints-foreign-keys': string;
+  '6-triggers': string;
+  '7-policies': string;
+}
+
+function generateSplitMigrationSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata,
+  targetMetadata: SchemaMetadata,
+  direction: "source-to-target" | "target-to-source"
+): SplitMigrationFiles {
+  const isSourceToTarget = direction === "source-to-target";
+  const sourceMetadataToUse = isSourceToTarget ? sourceMetadata : targetMetadata;
+  const targetMetadataToUse = isSourceToTarget ? targetMetadata : sourceMetadata;
+
+  const header = `-- Migration: ${direction}\n-- Generated: ${new Date().toLocaleString()}\n-- WARNING: Review carefully before executing!\n\n`;
+
+  return {
+    '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(sourceMetadataToUse, targetMetadataToUse),
+    '2-sequences': header + generateSequencesSQL(diff, sourceMetadataToUse),
+    '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse),
+    '4-indexes': header + generateIndexesSQL(diff, sourceMetadataToUse),
+    '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(diff, sourceMetadataToUse, isSourceToTarget),
+    '6-triggers': header + generateTriggersSQL(diff, sourceMetadataToUse, targetMetadataToUse),
+    '7-policies': header + generatePoliciesSQL(diff, sourceMetadataToUse, targetMetadataToUse),
+  };
+}
+
+// Generate migration README with instructions
+function generateMigrationReadme(outputPrefix: string): string {
+  const timestamp = new Date().toLocaleString();
+
+  return `# Database Migration Guide
+
+**Generated:** ${timestamp}
+
+This directory contains database migration scripts organized into subdirectories by type. Each script is numbered to indicate the sequence in which they should be executed.
+
+## Directory Structure
+
+\`\`\`
+.
+├── diff-source-to-target/          # Migrations to sync target with source
+│   ├── 1-extensions-enums-functions.sql
+│   ├── 2-sequences.sql
+│   ├── 3-tables.sql
+│   ├── 4-indexes.sql
+│   ├── 5-constraints-foreign-keys.sql
+│   ├── 6-triggers.sql
+│   └── 7-policies.sql
+├── diff-target-to-source/          # Migrations to sync source with target
+│   └── (same structure as above)
+├── full-source/                    # Complete source DB schema (if generated)
+│   └── (same structure as above)
+├── full-target/                    # Complete target DB schema (if generated)
+│   └── (same structure as above)
+└── ${outputPrefix}-MIGRATION-README.md
+\`\`\`
+
+## File Overview
+
+### diff-source-to-target/
+These scripts migrate changes FROM the source database TO the target database:
+
+1. \`1-extensions-enums-functions.sql\`
+   - Creates PostgreSQL extensions (uuid-ossp, postgis, etc.)
+   - Creates ENUM types
+   - Creates functions needed by triggers
+   - **Dependencies:** None
+
+2. \`2-sequences.sql\`
+   - Creates sequences for auto-incrementing columns
+   - **Dependencies:** None (but logically before tables)
+
+3. \`3-tables.sql\`
+   - Creates table structures with columns
+   - Adds missing columns to existing tables
+   - Sets sequence ownership
+   - **Dependencies:** Extensions, ENUMs, Sequences
+
+4. \`4-indexes.sql\`
+   - Creates primary keys
+   - Creates indexes (unique and regular)
+   - **Dependencies:** Tables
+
+5. \`5-constraints-foreign-keys.sql\`
+   - Creates CHECK constraints
+   - Creates foreign key constraints
+   - **Dependencies:** Tables, possibly other tables (for FKs)
+
+6. \`6-triggers.sql\`
+   - Creates triggers on tables
+   - **Dependencies:** Tables, Functions
+
+7. \`7-policies.sql\`
+   - Enables Row Level Security (RLS)
+   - Creates RLS policies
+   - **Dependencies:** Tables
+
+### diff-target-to-source/
+These scripts migrate changes FROM the target database TO the source database (reverse direction):
+
+- Same structure as above
+
+### full-source/ and full-target/
+If you used \`--generateFullMigrations\`, these directories contain complete schema dumps:
+
+- \`full-source/\`: Complete schema dump of the source database
+  - Use these to recreate the source database from scratch locally
+
+- \`full-target/\`: Complete schema dump of the target database
+  - Use these to recreate the target database from scratch locally
+
+## How to Run Migrations
+
+### Option 1: Run All At Once (Recommended for first-time sync)
+
+\`\`\`bash
+# For source → target
+for file in diff-source-to-target/*.sql; do
+  echo "Executing $file..."
+  psql $TARGET_DB_URL -f "$file"
+done
+
+# For target → source
+for file in diff-target-to-source/*.sql; do
+  echo "Executing $file..."
+  psql $SOURCE_DB_URL -f "$file"
+done
+\`\`\`
+
+### Option 2: Run Individually (Recommended for troubleshooting)
+
+Execute files in numbered order:
+
+\`\`\`bash
+# Example: Migrating source → target
+cd diff-source-to-target
+psql $TARGET_DB_URL -f 1-extensions-enums-functions.sql
+psql $TARGET_DB_URL -f 2-sequences.sql
+psql $TARGET_DB_URL -f 3-tables.sql
+psql $TARGET_DB_URL -f 4-indexes.sql
+psql $TARGET_DB_URL -f 5-constraints-foreign-keys.sql
+psql $TARGET_DB_URL -f 6-triggers.sql
+psql $TARGET_DB_URL -f 7-policies.sql
+\`\`\`
+
+### Option 3: Selective Migration
+
+You can run only specific categories if needed:
+
+\`\`\`bash
+# Example: Only sync missing tables and columns
+psql $TARGET_DB_URL -f diff-source-to-target/3-tables.sql
+
+# Example: Only sync indexes
+psql $TARGET_DB_URL -f diff-source-to-target/4-indexes.sql
+\`\`\`
+
+### Option 4: Clone Database Locally from Full Schema Dump
+
+If you generated full migrations with \`--generateFullMigrations\`:
+
+\`\`\`bash
+# Create a new local database
+createdb my_local_db
+
+# Run all source schema files in order
+cd full-source
+for file in *.sql; do
+  psql my_local_db -f "$file"
+done
+
+# Or for target database
+createdb my_local_target_db
+cd ../full-target
+for file in *.sql; do
+  psql my_local_target_db -f "$file"
+done
+\`\`\`
+
+## Important Notes
+
+### Before Running Migrations
+
+1. **Backup your database** before running any migrations
+2. **Review each SQL file** to understand what changes will be made
+3. **Test in a non-production environment** first
+4. Ensure you have the correct database connection strings
+
+### Dependencies
+
+- Files MUST be executed in numbered order (1 → 7)
+- Some files may be empty if there are no changes in that category
+- Foreign key constraints (file 5) may fail if referenced tables don't exist
+
+### Common Issues
+
+**Foreign Key Failures:**
+- If a foreign key references a table that doesn't exist in the target, the migration will fail
+- You may need to create the referenced table first or temporarily disable the foreign key
+
+**Duplicate Object Errors:**
+- Extensions and ENUMs are wrapped in error-handling to skip if they already exist
+- Other objects use \`IF NOT EXISTS\` where possible
+
+**Permission Errors:**
+- Ensure your database user has permission to:
+  - Create extensions (requires superuser for some extensions)
+  - Create types, functions, tables, indexes
+  - Alter tables
+  - Create triggers and policies
+
+### Rollback
+
+To rollback changes:
+1. Restore from your backup (recommended)
+2. Or manually run \`DROP\` statements for created objects in reverse order (7 → 1)
+
+### Using with Supabase
+
+For Supabase projects:
+1. Use the SQL Editor in the Supabase Dashboard
+2. Copy and paste the content of each file
+3. Execute in numbered order
+4. Or use the Supabase CLI: \`supabase db execute -f <filename>\`
+
+## File Contents Summary
+
+Each file contains:
+- Header with migration direction and timestamp
+- Section header explaining what's included
+- SQL statements with comments
+- Empty files will contain a comment indicating no changes
+
+## Need Help?
+
+- Review the main comparison report: \`${outputPrefix}.md\`
+- Check the schema health score for severity of changes
+- Consult PostgreSQL documentation for specific SQL syntax
+
+---
+
+**Generated by:** Database Schema Comparison Tool
+**Date:** ${timestamp}
+`;
+}
+
+// Generate SQL migration scripts (LEGACY - kept for backward compatibility)
+function generateMigrationSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata,
+  targetMetadata: SchemaMetadata,
+  direction: "source-to-target" | "target-to-source"
+): string {
+  let sql = `-- Migration Script: ${direction}\n`;
+  sql += `-- Generated: ${new Date().toLocaleString()}\n`;
+  sql += `-- WARNING: Review carefully before executing!\n\n`;
+
+  const isSourceToTarget = direction === "source-to-target";
+
+  const sourceMetadataToUse = isSourceToTarget ? sourceMetadata : targetMetadata;
+  const targetMetadataToUse = isSourceToTarget ? targetMetadata : sourceMetadata;
+
+  // Create extensions first
+  const sourceExtensions = new Set(sourceMetadataToUse.extensions);
+  const targetExtensions = new Set(targetMetadataToUse.extensions);
+  const missingExtensions = Array.from(sourceExtensions).filter(ext => !targetExtensions.has(ext));
+
+  if (missingExtensions.length > 0) {
+    sql += `-- ============================================================\n`;
+    sql += `-- CREATE MISSING EXTENSIONS\n`;
+    sql += `-- ============================================================\n\n`;
+
+    for (const ext of missingExtensions) {
+      sql += `CREATE EXTENSION IF NOT EXISTS "${ext}";\n`;
+    }
+    sql += `\n`;
+  }
+
+  // Create ENUM types next
+  const sourceEnums = new Map(sourceMetadataToUse.enums.map(e => [`${e.schema}.${e.name}`, e]));
+  const targetEnums = new Map(targetMetadataToUse.enums.map(e => [`${e.schema}.${e.name}`, e]));
+  const missingEnums: EnumTypeInfo[] = [];
+
+  for (const [key, enumInfo] of sourceEnums) {
+    if (!targetEnums.has(key)) {
+      missingEnums.push(enumInfo);
+    }
+  }
+
+  if (missingEnums.length > 0) {
+    sql += `-- ============================================================\n`;
+    sql += `-- CREATE MISSING ENUM TYPES\n`;
+    sql += `-- ============================================================\n\n`;
+
+    for (const enumInfo of missingEnums) {
+      // Skip if values array is empty or invalid
+      if (!enumInfo.values || !Array.isArray(enumInfo.values) || enumInfo.values.length === 0) {
+        sql += `-- WARNING: ENUM type ${enumInfo.schema}.${enumInfo.name} has no values, skipping\n\n`;
+        continue;
+      }
+
+      sql += `-- Create ENUM type: ${enumInfo.schema}.${enumInfo.name}\n`;
+      sql += `DO $$ BEGIN\n`;
+      sql += `  CREATE TYPE "${enumInfo.schema}"."${enumInfo.name}" AS ENUM (\n`;
+      sql += enumInfo.values.map(v => `    '${v.replace(/'/g, "''")}'`).join(',\n');
+      sql += `\n  );\n`;
+      sql += `EXCEPTION\n`;
+      sql += `  WHEN duplicate_object THEN null;\n`;
+      sql += `END $$;\n\n`;
+    }
+  }
+
+  // Create functions next (needed by triggers)
+  const sourceFunctions = new Map(sourceMetadataToUse.functions.map(f => [`${f.schema}.${f.name}`, f]));
+  const targetFunctions = new Map(targetMetadataToUse.functions.map(f => [`${f.schema}.${f.name}`, f]));
+  const missingFunctions: FunctionInfo[] = [];
+
+  for (const [key, funcInfo] of sourceFunctions) {
+    if (!targetFunctions.has(key)) {
+      missingFunctions.push(funcInfo);
+    }
+  }
+
+  if (missingFunctions.length > 0) {
+    sql += `-- ============================================================\n`;
+    sql += `-- CREATE MISSING FUNCTIONS\n`;
+    sql += `-- ============================================================\n\n`;
+
+    for (const funcInfo of missingFunctions) {
+      sql += `-- Function: ${funcInfo.schema}.${funcInfo.name}\n`;
+      sql += `${funcInfo.definition};\n\n`;
+    }
+  }
+
+  // Tables to create
+  const tablesToCreate = isSourceToTarget ? diff.tablesOnlyInSource : diff.tablesOnlyInTarget;
+  const schemaMap = sourceMetadataToUse.tables;
+
+  if (tablesToCreate.length > 0) {
+    sql += `-- ============================================================\n`;
+    sql += `-- CREATE MISSING TABLES\n`;
+    sql += `-- ============================================================\n\n`;
+
+    for (const tableRef of tablesToCreate) {
+      const tableKey = `${tableRef.schema}.${tableRef.table}`;
+      const tableInfo = schemaMap.get(tableKey);
+      if (!tableInfo) continue;
+
+      // Create sequences first if the table uses any
+      if (tableInfo.sequences.length > 0) {
+        sql += `-- Create sequences for table: ${tableRef.schema}.${tableRef.table}\n`;
+        for (const seq of tableInfo.sequences) {
+          sql += `CREATE SEQUENCE IF NOT EXISTS "${seq.sequence_schema}"."${seq.sequence_name}"\n`;
+          sql += `  AS ${seq.data_type}\n`;
+          sql += `  INCREMENT BY ${seq.increment}\n`;
+          sql += `  START WITH ${seq.start_value}\n`;
+          sql += `  MINVALUE ${seq.min_value}\n`;
+          sql += `  MAXVALUE ${seq.max_value}\n`;
+          sql += `  ${seq.cycle ? 'CYCLE' : 'NO CYCLE'};\n\n`;
+        }
+      }
+
+      sql += `-- Create table: ${tableRef.schema}.${tableRef.table}\n`;
+      sql += `CREATE TABLE IF NOT EXISTS "${tableRef.schema}"."${tableRef.table}" (\n`;
+
+      const columnDefs: string[] = [];
+      for (const col of tableInfo.columns) {
+        columnDefs.push(`  ${formatColumnDefinition(col)}`);
+      }
+
+      sql += columnDefs.join(',\n');
+      sql += `\n);\n\n`;
+
+      // Set sequence ownership for auto-owned sequences
+      if (tableInfo.sequences.length > 0) {
+        for (const seq of tableInfo.sequences) {
+          // Find which column uses this sequence
+          for (const col of tableInfo.columns) {
+            if (col.column_default?.includes(seq.sequence_name)) {
+              sql += `ALTER SEQUENCE "${seq.sequence_schema}"."${seq.sequence_name}" OWNED BY "${tableRef.schema}"."${tableRef.table}"."${col.column_name}";\n\n`;
+              break;
+            }
+          }
+        }
+      }
+
+      // Add indexes
+      for (const idx of tableInfo.indexes) {
+        if (idx.is_primary) {
+          sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD PRIMARY KEY (${idx.columns.map(c => `"${c}"`).join(', ')});\n\n`;
+        } else {
+          const uniqueStr = idx.is_unique ? 'UNIQUE ' : '';
+          sql += `CREATE ${uniqueStr}INDEX IF NOT EXISTS "${idx.index_name}" ON "${tableRef.schema}"."${tableRef.table}" USING ${idx.index_type} (${idx.columns.map(c => `"${c}"`).join(', ')});\n\n`;
+        }
+      }
+
+      // Add foreign keys
+      for (const fk of tableInfo.foreignKeys) {
+        sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD CONSTRAINT "${fk.constraint_name}" `;
+        sql += `FOREIGN KEY ("${fk.column_name}") REFERENCES "${fk.foreign_table_schema}"."${fk.foreign_table_name}"("${fk.foreign_column_name}")`;
+        sql += ` ON DELETE ${fk.on_delete} ON UPDATE ${fk.on_update};\n\n`;
+      }
+
+      // Add constraints
+      for (const constraint of tableInfo.constraints) {
+        if (constraint.constraint_type === 'CHECK' && constraint.check_clause) {
+          // Ensure check_clause has proper parentheses
+          const checkClause = constraint.check_clause.trim().startsWith('(')
+            ? constraint.check_clause
+            : `(${constraint.check_clause})`;
+          sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD CONSTRAINT "${constraint.constraint_name}" CHECK ${checkClause};\n\n`;
+        }
+      }
+
+      // Add triggers
+      for (const trigger of tableInfo.triggers) {
+        sql += `-- Trigger: ${trigger.trigger_name}\n`;
+        sql += `CREATE TRIGGER "${trigger.trigger_name}"\n`;
+        sql += `  ${trigger.action_timing} ${trigger.event_manipulation}\n`;
+        sql += `  ON "${tableRef.schema}"."${tableRef.table}"\n`;
+        sql += `  ${trigger.action_statement};\n\n`;
+      }
+
+      // Add RLS policies
+      if (tableInfo.policies.length > 0) {
+        sql += `-- Enable RLS\n`;
+        sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ENABLE ROW LEVEL SECURITY;\n\n`;
+
+        for (const policy of tableInfo.policies) {
+          const roles = Array.isArray(policy.roles) ? policy.roles : [];
+          const rolesStr = roles.length > 0 ? roles.join(', ') : 'public';
+
+          sql += `-- Policy: ${policy.policy_name}\n`;
+          sql += `CREATE POLICY "${policy.policy_name}"\n`;
+          sql += `  ON "${tableRef.schema}"."${tableRef.table}"\n`;
+          sql += `  AS ${policy.permissive}\n`;
+          sql += `  FOR ${policy.cmd}\n`;
+          sql += `  TO ${rolesStr}\n`;
+          if (policy.qual) {
+            sql += `  USING (${policy.qual})\n`;
+          }
+          if (policy.with_check) {
+            sql += `  WITH CHECK (${policy.with_check})\n`;
+          }
+          sql += `;\n\n`;
+        }
+      }
+    }
+  }
+
+  // Column and constraint modifications for existing tables
+  if (diff.tablesInBoth.length > 0) {
+    sql += `-- ============================================================\n`;
+    sql += `-- MODIFY EXISTING TABLES\n`;
+    sql += `-- ============================================================\n\n`;
+
+    for (const table of diff.tablesInBoth) {
+      // Get the full table info to access triggers and policies
+      const tableKey = `${table.table_schema}.${table.table_name}`;
+      const sourceTableInfo = sourceMetadataToUse.tables.get(tableKey);
+      const targetTableInfo = targetMetadataToUse.tables.get(tableKey);
+
+      const hasColumnChanges =
+        (isSourceToTarget && table.columnsOnlyInSource.length > 0) ||
+        (!isSourceToTarget && table.columnsOnlyInTarget.length > 0);
+
+      const hasIndexChanges =
+        (isSourceToTarget && table.indexesOnlyInSource.length > 0) ||
+        (!isSourceToTarget && table.indexesOnlyInTarget.length > 0);
+
+      const hasFKChanges =
+        (isSourceToTarget && table.foreignKeysOnlyInSource.length > 0) ||
+        (!isSourceToTarget && table.foreignKeysOnlyInTarget.length > 0);
+
+      const hasConstraintChanges =
+        (isSourceToTarget && table.constraintsOnlyInSource.length > 0) ||
+        (!isSourceToTarget && table.constraintsOnlyInTarget.length > 0);
+
+      // Check for trigger differences
+      const sourceTriggers = new Set(sourceTableInfo?.triggers.map(t => t.trigger_name) || []);
+      const targetTriggers = new Set(targetTableInfo?.triggers.map(t => t.trigger_name) || []);
+      const missingTriggers = sourceTableInfo?.triggers.filter(t => !targetTriggers.has(t.trigger_name)) || [];
+      const hasTriggerChanges = missingTriggers.length > 0;
+
+      // Check for policy differences
+      const sourcePolicies = new Set(sourceTableInfo?.policies.map(p => p.policy_name) || []);
+      const targetPolicies = new Set(targetTableInfo?.policies.map(p => p.policy_name) || []);
+      const missingPolicies = sourceTableInfo?.policies.filter(p => !targetPolicies.has(p.policy_name)) || [];
+      const hasPolicyChanges = missingPolicies.length > 0;
+
+      if (!hasColumnChanges && !hasIndexChanges && !hasFKChanges && !hasConstraintChanges && !hasTriggerChanges && !hasPolicyChanges) {
+        continue;
+      }
+
+      sql += `-- Table: ${table.table_schema}.${table.table_name}\n`;
+
+      // Add missing columns
+      const columnsToAdd = isSourceToTarget ? table.columnsOnlyInSource : table.columnsOnlyInTarget;
+      if (columnsToAdd.length > 0) {
+        sql += `\n-- Add missing columns\n`;
+        for (const col of columnsToAdd) {
+          sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD COLUMN IF NOT EXISTS ${formatColumnDefinition(col)};\n`;
+        }
+      }
+
+      // Add missing indexes
+      const indexesToAdd = isSourceToTarget ? table.indexesOnlyInSource : table.indexesOnlyInTarget;
+      if (indexesToAdd.length > 0) {
+        sql += `\n-- Add missing indexes\n`;
+        for (const idx of indexesToAdd) {
+          if (idx.is_primary) {
+            sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD PRIMARY KEY (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+          } else {
+            const uniqueStr = idx.is_unique ? 'UNIQUE ' : '';
+            sql += `CREATE ${uniqueStr}INDEX IF NOT EXISTS "${idx.index_name}" ON "${table.table_schema}"."${table.table_name}" USING ${idx.index_type} (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+          }
+        }
+      }
+
+      // Add missing foreign keys
+      const fksToAdd = isSourceToTarget ? table.foreignKeysOnlyInSource : table.foreignKeysOnlyInTarget;
+      if (fksToAdd.length > 0) {
+        sql += `\n-- Add missing foreign keys\n`;
+        for (const fk of fksToAdd) {
+          sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD CONSTRAINT "${fk.constraint_name}" `;
+          sql += `FOREIGN KEY ("${fk.column_name}") REFERENCES "${fk.foreign_table_schema}"."${fk.foreign_table_name}"("${fk.foreign_column_name}")`;
+          sql += ` ON DELETE ${fk.on_delete} ON UPDATE ${fk.on_update};\n`;
+        }
+      }
+
+      // Add missing constraints
+      const constraintsToAdd = isSourceToTarget ? table.constraintsOnlyInSource : table.constraintsOnlyInTarget;
+      if (constraintsToAdd.length > 0) {
+        sql += `\n-- Add missing constraints\n`;
+        for (const constraint of constraintsToAdd) {
+          if (constraint.constraint_type === 'CHECK' && constraint.check_clause) {
+            // Ensure check_clause has proper parentheses
+            const checkClause = constraint.check_clause.trim().startsWith('(')
+              ? constraint.check_clause
+              : `(${constraint.check_clause})`;
+            sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD CONSTRAINT "${constraint.constraint_name}" CHECK ${checkClause};\n`;
+          }
+        }
+      }
+
+      // Add missing triggers
+      if (hasTriggerChanges && missingTriggers.length > 0) {
+        sql += `\n-- Add missing triggers\n`;
+        for (const trigger of missingTriggers) {
+          sql += `CREATE TRIGGER "${trigger.trigger_name}"\n`;
+          sql += `  ${trigger.action_timing} ${trigger.event_manipulation}\n`;
+          sql += `  ON "${table.table_schema}"."${table.table_name}"\n`;
+          sql += `  ${trigger.action_statement};\n`;
+        }
+      }
+
+      // Add missing RLS policies
+      if (hasPolicyChanges && missingPolicies.length > 0) {
+        sql += `\n-- Add missing RLS policies\n`;
+        // Enable RLS if there are policies to add
+        sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ENABLE ROW LEVEL SECURITY;\n\n`;
+
+        for (const policy of missingPolicies) {
+          const roles = Array.isArray(policy.roles) ? policy.roles : [];
+          const rolesStr = roles.length > 0 ? roles.join(', ') : 'public';
+
+          sql += `CREATE POLICY "${policy.policy_name}"\n`;
+          sql += `  ON "${table.table_schema}"."${table.table_name}"\n`;
+          sql += `  AS ${policy.permissive}\n`;
+          sql += `  FOR ${policy.cmd}\n`;
+          sql += `  TO ${rolesStr}\n`;
+          if (policy.qual) {
+            sql += `  USING (${policy.qual})\n`;
+          }
+          if (policy.with_check) {
+            sql += `  WITH CHECK (${policy.with_check})\n`;
+          }
+          sql += `;\n`;
+        }
+      }
+
+      sql += `\n`;
+    }
+  }
+
+  sql += `-- Migration script complete.\n`;
+  return sql;
+}
+
+
+function calculateHealthMetrics(diff: SchemaDiff): HealthMetrics {
+  const issues: string[] = [];
+  let score = 100;
+
+  const missingTableCount =
+    diff.tablesOnlyInSource.length + diff.tablesOnlyInTarget.length;
+  const tablesWithDiffs = diff.tablesInBoth.length;
+
+  // Deduct points for missing tables (more severe)
+  score -= missingTableCount * 10;
+  if (missingTableCount > 0) {
+    issues.push(`${missingTableCount} table(s) exist in only one database`);
+  }
+
+  // Count critical column differences
+  let criticalDiffs = 0;
+  let nonCriticalDiffs = 0;
+  let missingColumns = 0;
+
+  for (const table of diff.tablesInBoth) {
+    missingColumns +=
+      table.columnsOnlyInSource.length + table.columnsOnlyInTarget.length;
+
+    for (const colDiff of table.columnsWithDifferences) {
+      if (colDiff.isCritical) {
+        criticalDiffs++;
+      } else {
+        nonCriticalDiffs++;
+      }
+    }
+  }
+
+  // Deduct points for column differences
+  score -= criticalDiffs * 8;
+  score -= nonCriticalDiffs * 3;
+  score -= missingColumns * 5;
+
+  if (criticalDiffs > 0) {
+    issues.push(
+      `${criticalDiffs} critical column difference(s) detected (type changes, nullability changes)`
+    );
+  }
+
+  if (missingColumns > 0) {
+    issues.push(`${missingColumns} column(s) missing in one database`);
+  }
+
+  if (nonCriticalDiffs > 0) {
+    issues.push(
+      `${nonCriticalDiffs} non-critical column difference(s) (defaults, lengths, etc.)`
+    );
+  }
+
+  // Ensure score doesn't go below 0
+  score = Math.max(0, score);
+
+  // Determine severity
+  let severity: "healthy" | "minor" | "moderate" | "critical";
+  if (score >= 90) {
+    severity = "healthy";
+  } else if (score >= 70) {
+    severity = "minor";
+  } else if (score >= 40) {
+    severity = "moderate";
+  } else {
+    severity = "critical";
+  }
+
+  return { score, issues, severity };
+}
+
+
+
+export { calculateSyncDirections, calculateHealthMetrics };

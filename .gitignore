@@ -1,0 +1,27 @@
+# Configuration (contains sensitive database credentials)
+db-config.json
+
+# Output directories (generated on each run)
+diff-source-to-target/
+diff-target-to-source/
+full-source/
+full-target/
+
+# Generated reports and SQL files
+*.md
+!README.md
+*.sql
+
+# Bun
+node_modules/
+bun.lockb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+{
+  "_comment": "Configuration for database schema comparison tool",
+
+  "_mode_comparison": "Use both source and target for comparison mode",
+  "source": "postgresql://user:password@host:port/prod_database",
+  "target": "postgresql://user:password@host:port/dev_database",
+
+  "_mode_dump_only": "Omit 'target' to use dump-only mode (requires --generateFullMigrations flag)",
+
+  "_options": "Optional configuration",
+  "excludeTables": ["migrations", "schema_migrations"],
+  "skipSchemas": ["extensions", "graphql", "realtime"],
+  "outputDir": "migrations"
+}

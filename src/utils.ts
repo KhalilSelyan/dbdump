@@ -90,3 +90,30 @@ export function areColumnArraysEqual(arr1: string[], arr2: string[]): boolean {
   const sorted2 = [...arr2].sort().join(',');
   return sorted1 === sorted2;
 }
+
+/**
+ * Find a unique index that matches the given UNIQUE constraint columns
+ */
+export function findEquivalentUniqueIndex(
+  constraintColumns: string[],
+  indexes: any[]
+): any | undefined {
+  return indexes.find(idx =>
+    idx.is_unique === true &&
+    !idx.is_primary &&
+    areColumnArraysEqual(idx.columns, constraintColumns)
+  );
+}
+
+/**
+ * Find a UNIQUE constraint that matches the given unique index columns
+ */
+export function findEquivalentUniqueConstraint(
+  indexColumns: string[],
+  constraints: any[]
+): any | undefined {
+  return constraints.find(constraint =>
+    constraint.constraint_type === 'UNIQUE' &&
+    areColumnArraysEqual(constraint.columns, indexColumns)
+  );
+}

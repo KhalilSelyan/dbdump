@@ -1,5 +1,5 @@
 import type { SchemaMetadata, SchemaDiff, TableDiff, ColumnDifference, FilterOptions } from './types';
-import { normalizeCheckClause, areColumnArraysEqual } from './utils';
+import { normalizeCheckClause, areColumnArraysEqual, findEquivalentUniqueIndex, findEquivalentUniqueConstraint } from './utils';
 
 function compareColumns(
   source: ColumnInfo,
@@ -189,13 +189,29 @@ function compareSchemas(
 
     for (const [idxName, idxInfo] of sourceIndexes) {
       if (!targetIndexes.has(idxName)) {
-        tableDiff.indexesOnlyInSource.push(idxInfo);
+        // For unique indexes, check if an equivalent UNIQUE constraint exists in target
+        if (idxInfo.is_unique && !idxInfo.is_primary && idxInfo.columns) {
+          const equivalentConstraint = findEquivalentUniqueConstraint(idxInfo.columns, targetTable.constraints);
+          if (!equivalentConstraint) {
+            tableDiff.indexesOnlyInSource.push(idxInfo);
+          }
+        } else {
+          tableDiff.indexesOnlyInSource.push(idxInfo);
+        }
       }
     }
 
     for (const [idxName, idxInfo] of targetIndexes) {
       if (!sourceIndexes.has(idxName)) {
-        tableDiff.indexesOnlyInTarget.push(idxInfo);
+        // For unique indexes, check if an equivalent UNIQUE constraint exists in source
+        if (idxInfo.is_unique && !idxInfo.is_primary && idxInfo.columns) {
+          const equivalentConstraint = findEquivalentUniqueConstraint(idxInfo.columns, sourceTable.constraints);
+          if (!equivalentConstraint) {
+            tableDiff.indexesOnlyInTarget.push(idxInfo);
+          }
+        } else {
+          tableDiff.indexesOnlyInTarget.push(idxInfo);
+        }
       }
     }
 
@@ -274,6 +290,7 @@ function compareSchemas(
         const sourceColumns = [...cInfo.columns].sort().join(',');
         let foundEquivalent = false;
 
+        // Check for equivalent UNIQUE constraint
         for (const targetConstraint of targetConstraints.values()) {
           if (targetConstraint.constraint_type === 'UNIQUE' && targetConstraint.columns && Array.isArray(targetConstraint.columns) && targetConstraint.columns.length > 0) {
             const targetColumns = [...targetConstraint.columns].sort().join(',');
@@ -281,6 +298,14 @@ function compareSchemas(
               foundEquivalent = true;
               break;
             }
+          }
+        }
+
+        // Also check if an equivalent unique index exists in target
+        if (!foundEquivalent) {
+          const equivalentIndex = findEquivalentUniqueIndex(cInfo.columns, targetTable.indexes);
+          if (equivalentIndex) {
+            foundEquivalent = true;
           }
         }
 
@@ -323,6 +348,7 @@ function compareSchemas(
         const targetColumns = [...cInfo.columns].sort().join(',');
         let foundEquivalent = false;
 
+        // Check for equivalent UNIQUE constraint
         for (const sourceConstraint of sourceConstraints.values()) {
           if (sourceConstraint.constraint_type === 'UNIQUE' && sourceConstraint.columns && Array.isArray(sourceConstraint.columns) && sourceConstraint.columns.length > 0) {
             const sourceColumns = [...sourceConstraint.columns].sort().join(',');
@@ -330,6 +356,14 @@ function compareSchemas(
               foundEquivalent = true;
               break;
             }
+          }
+        }
+
+        // Also check if an equivalent unique index exists in source
+        if (!foundEquivalent) {
+          const equivalentIndex = findEquivalentUniqueIndex(cInfo.columns, sourceTable.indexes);
+          if (equivalentIndex) {
+            foundEquivalent = true;
           }
         }
 

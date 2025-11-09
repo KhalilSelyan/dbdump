@@ -13,6 +13,7 @@ import {
   generateMigrationReadme
 } from './src/generators/sql';
 import { writeMarkdown, printSummary, writeWarningReports } from './src/generators/markdown';
+import { generateCleanupScripts } from './src/generators/cleanup';
 import { calculateHealthMetrics, calculateSyncDirections } from './src/health';
 import { parseArguments, printHelp, loadConfig } from './src/config';
 import { maskConnectionString } from './src/utils';
@@ -293,6 +294,30 @@ async function main() {
     await Bun.write(readmePath, readme);
     console.log(`\n  Migration guide:`);
     console.log(`    ✓ ${readmePath}`);
+  }
+
+  // Generate cleanup scripts if requested
+  if (args.generateCleanupSQL && !dumpOnlyMode && healthMetrics?.warnings) {
+    console.log(`\nGenerating cleanup scripts...`);
+
+    const dryRun = args.cleanupDryRun !== false; // default to true
+    const cleanupScripts = generateCleanupScripts(
+      diff,
+      sourceMetadata,
+      targetMetadata,
+      healthMetrics.warnings.sourceWarnings,
+      healthMetrics.warnings.targetWarnings,
+      dryRun
+    );
+
+    const cleanupSourcePath = `${outputDir}/cleanup-source.sql`;
+    const cleanupTargetPath = `${outputDir}/cleanup-target.sql`;
+
+    await Bun.write(cleanupSourcePath, cleanupScripts.source);
+    console.log(`  ✓ ${cleanupSourcePath}${dryRun ? ' (DRY RUN)' : ''}`);
+
+    await Bun.write(cleanupTargetPath, cleanupScripts.target);
+    console.log(`  ✓ ${cleanupTargetPath}${dryRun ? ' (DRY RUN)' : ''}`);
   }
 
   // Generate full database migrations if requested

@@ -54,6 +54,13 @@ function parseArguments() {
       generateFullMigrations: {
         type: "boolean",
       },
+      generateCleanupSQL: {
+        type: "boolean",
+      },
+      cleanupDryRun: {
+        type: "boolean",
+        default: true,
+      },
       help: {
         type: "boolean",
         short: "h",

@@ -244,6 +244,8 @@ export interface CLIArgs {
   onlyColumnDiffs?: boolean;
   criticalOnly?: boolean;
   generateFullMigrations?: boolean;
+  generateCleanupSQL?: boolean;
+  cleanupDryRun?: boolean;
   saveHistory?: boolean;
   help?: boolean;
 }

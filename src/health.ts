@@ -1,4 +1,15 @@
-import type { SchemaDiff, HealthMetrics, SyncDirections, SyncDirection, SchemaMetadata, WarningConfig, IgnoreRule } from './types';
+import type {
+  SchemaDiff,
+  HealthMetrics,
+  SyncDirections,
+  SyncDirection,
+  SchemaMetadata,
+  WarningConfig,
+  IgnoreRule,
+  SyncHealth,
+  CategoryScore,
+  QualityScore
+} from './types';
 import { generateWarningsReport } from './warnings';
 
 function calculateSyncDirections(diff: SchemaDiff): SyncDirections {
@@ -1166,27 +1177,119 @@ function calculateHealthMetrics(
   warningConfig?: WarningConfig,
   ignoreRules?: IgnoreRule[]
 ): HealthMetrics {
+  // Calculate sync health (how similar are the databases)
+  const syncHealth = calculateSyncHealth(diff);
+
+  // Calculate quality scores (how healthy is each database individually)
+  const sourceWarnings = generateWarningsReport(
+    sourceMetadata,
+    { tables: new Map(), enums: [], extensions: [], functions: [] }, // empty target for source-only warnings
+    warningConfig,
+    ignoreRules
+  );
+
+  const targetWarnings = generateWarningsReport(
+    targetMetadata,
+    { tables: new Map(), enums: [], extensions: [], functions: [] }, // empty target for target-only warnings
+    warningConfig,
+    ignoreRules
+  );
+
+  const sourceQuality = calculateQualityScore(sourceWarnings);
+  const targetQuality = calculateQualityScore(targetWarnings);
+
+  return {
+    sync: syncHealth,
+    sourceQuality,
+    targetQuality
+  };
+}
+
+function calculateSyncHealth(diff: SchemaDiff): SyncHealth {
+  const maxScore = 100;
+
+  // Calculate scores for each category
+  const tablesScore = calculateTablesSyncScore(diff);
+  const columnsScore = calculateColumnsSyncScore(diff);
+  const indexesScore = calculateIndexesSyncScore(diff);
+  const constraintsScore = calculateConstraintsSyncScore(diff);
+  const otherScore = calculateOtherSyncScore(diff);
+
+  // Calculate overall score (weighted average)
+  const weights = {
+    tables: 0.30,      // 30% - most important
+    columns: 0.30,     // 30% - equally important
+    indexes: 0.15,     // 15%
+    constraints: 0.15, // 15%
+    other: 0.10        // 10%
+  };
+
+  const overallScore = Math.round(
+    tablesScore.score * weights.tables +
+    columnsScore.score * weights.columns +
+    indexesScore.score * weights.indexes +
+    constraintsScore.score * weights.constraints +
+    otherScore.score * weights.other
+  );
+
+  const allIssues: string[] = [
+    ...tablesScore.issues,
+    ...columnsScore.issues,
+    ...indexesScore.issues,
+    ...constraintsScore.issues,
+    ...otherScore.issues
+  ];
+
+  return {
+    overall: {
+      score: overallScore,
+      maxScore,
+      label: "Overall Sync",
+      issues: allIssues
+    },
+    categories: {
+      tables: tablesScore,
+      columns: columnsScore,
+      indexes: indexesScore,
+      constraints: constraintsScore,
+      other: otherScore
+    }
+  };
+}
+
+function calculateTablesSyncScore(diff: SchemaDiff): CategoryScore {
+  const maxScore = 100;
   const issues: string[] = [];
-  let score = 100;
 
-  const missingTableCount =
-    diff.tablesOnlyInSource.length + diff.tablesOnlyInTarget.length;
-  const tablesWithDiffs = diff.tablesInBoth.length;
+  const missingTables = diff.tablesOnlyInSource.length + diff.tablesOnlyInTarget.length;
 
-  // Deduct points for missing tables (more severe)
-  score -= missingTableCount * 10;
-  if (missingTableCount > 0) {
-    issues.push(`${missingTableCount} table(s) exist in only one database`);
+  if (missingTables === 0) {
+    return { score: 100, maxScore, label: "Tables", issues: [] };
   }
 
-  // Count critical column differences
+  // Deduct 10 points per missing table (max 100 points)
+  const score = Math.max(0, 100 - (missingTables * 10));
+
+  if (diff.tablesOnlyInSource.length > 0) {
+    issues.push(`${diff.tablesOnlyInSource.length} table(s) only in source`);
+  }
+  if (diff.tablesOnlyInTarget.length > 0) {
+    issues.push(`${diff.tablesOnlyInTarget.length} table(s) only in target`);
+  }
+
+  return { score, maxScore, label: "Tables", issues };
+}
+
+function calculateColumnsSyncScore(diff: SchemaDiff): CategoryScore {
+  const maxScore = 100;
+  const issues: string[] = [];
+
   let criticalDiffs = 0;
   let nonCriticalDiffs = 0;
   let missingColumns = 0;
 
   for (const table of diff.tablesInBoth) {
-    missingColumns +=
-      table.columnsOnlyInSource.length + table.columnsOnlyInTarget.length;
+    missingColumns += table.columnsOnlyInSource.length + table.columnsOnlyInTarget.length;
 
     for (const colDiff of table.columnsWithDifferences) {
       if (colDiff.isCritical) {
@@ -1197,54 +1300,116 @@ function calculateHealthMetrics(
     }
   }
 
-  // Deduct points for column differences
-  score -= criticalDiffs * 8;
-  score -= nonCriticalDiffs * 3;
-  score -= missingColumns * 5;
-
-  if (criticalDiffs > 0) {
-    issues.push(
-      `${criticalDiffs} critical column difference(s) detected (type changes, nullability changes)`
-    );
+  if (criticalDiffs === 0 && nonCriticalDiffs === 0 && missingColumns === 0) {
+    return { score: 100, maxScore, label: "Columns", issues: [] };
   }
 
+  // Scoring: critical diffs are most severe
+  let score = 100;
+  score -= criticalDiffs * 8;     // 8 points per critical diff
+  score -= nonCriticalDiffs * 3;  // 3 points per non-critical diff
+  score -= missingColumns * 5;    // 5 points per missing column
+  score = Math.max(0, score);
+
+  if (criticalDiffs > 0) {
+    issues.push(`${criticalDiffs} critical column difference(s) (type/nullability changes)`);
+  }
   if (missingColumns > 0) {
     issues.push(`${missingColumns} column(s) missing in one database`);
   }
-
   if (nonCriticalDiffs > 0) {
-    issues.push(
-      `${nonCriticalDiffs} non-critical column difference(s) (defaults, lengths, etc.)`
-    );
+    issues.push(`${nonCriticalDiffs} non-critical difference(s) (defaults, lengths)`);
   }
 
-  // Generate warnings for schema issues
-  const warningsReport = generateWarningsReport(
-    sourceMetadata,
-    targetMetadata,
-    warningConfig,
-    ignoreRules
-  );
+  return { score, maxScore, label: "Columns", issues };
+}
 
-  // Adjust score based on warnings
-  score -= warningsReport.criticalCount * 5;
-  score -= warningsReport.moderateCount * 2;
-  score -= warningsReport.minorCount * 1;
+function calculateIndexesSyncScore(diff: SchemaDiff): CategoryScore {
+  const maxScore = 100;
+  const issues: string[] = [];
 
-  // Add warning summary to issues
-  if (warningsReport.totalWarnings > 0) {
-    let message = `${warningsReport.totalWarnings} schema warning(s) detected ` +
-      `(${warningsReport.criticalCount} critical, ${warningsReport.moderateCount} moderate, ${warningsReport.minorCount} minor)`;
+  let missingIndexes = 0;
 
-    if (warningsReport.filteredCount) {
-      message += ` [${warningsReport.filteredCount} filtered]`;
-    }
-
-    issues.push(message);
+  for (const table of diff.tablesInBoth) {
+    missingIndexes += table.indexesOnlyInSource.length + table.indexesOnlyInTarget.length;
   }
 
-  // Ensure score doesn't go below 0
+  if (missingIndexes === 0) {
+    return { score: 100, maxScore, label: "Indexes", issues: [] };
+  }
+
+  // Deduct 5 points per missing index
+  const score = Math.max(0, 100 - (missingIndexes * 5));
+  issues.push(`${missingIndexes} index(es) differ between databases`);
+
+  return { score, maxScore, label: "Indexes", issues };
+}
+
+function calculateConstraintsSyncScore(diff: SchemaDiff): CategoryScore {
+  const maxScore = 100;
+  const issues: string[] = [];
+
+  let missingFKs = 0;
+  let missingConstraints = 0;
+
+  for (const table of diff.tablesInBoth) {
+    missingFKs += table.foreignKeysOnlyInSource.length + table.foreignKeysOnlyInTarget.length;
+    missingConstraints += table.constraintsOnlyInSource.length + table.constraintsOnlyInTarget.length;
+  }
+
+  if (missingFKs === 0 && missingConstraints === 0) {
+    return { score: 100, maxScore, label: "Constraints", issues: [] };
+  }
+
+  // Deduct points
+  let score = 100;
+  score -= missingFKs * 6;          // 6 points per missing FK
+  score -= missingConstraints * 4;  // 4 points per missing constraint
   score = Math.max(0, score);
+
+  if (missingFKs > 0) {
+    issues.push(`${missingFKs} foreign key(s) differ`);
+  }
+  if (missingConstraints > 0) {
+    issues.push(`${missingConstraints} constraint(s) differ`);
+  }
+
+  return { score, maxScore, label: "Constraints", issues };
+}
+
+function calculateOtherSyncScore(diff: SchemaDiff): CategoryScore {
+  const maxScore = 100;
+  const issues: string[] = [];
+
+  // For now, just return 100 - we could expand this to check triggers, policies, functions
+  // This is a placeholder for future enhancements
+
+  return { score: 100, maxScore, label: "Other", issues: [] };
+}
+
+function calculateQualityScore(warnings: WarningsReport): QualityScore {
+  const maxScore = 100;
+
+  // Score based on warnings
+  let score = 100;
+  score -= warnings.criticalCount * 5;
+  score -= warnings.moderateCount * 2;
+  score -= warnings.minorCount * 1;
+  score = Math.max(0, score);
+
+  // Determine grade (A-F)
+  let grade: "A" | "B" | "C" | "D" | "F";
+  if (score >= 90) {
+    grade = "A";
+  } else if (score >= 80) {
+    grade = "B";
+  } else if (score >= 70) {
+    grade = "C";
+  } else if (score >= 60) {
+    grade = "D";
+  } else {
+    grade = "F";
+  }
 
   // Determine severity
   let severity: "healthy" | "minor" | "moderate" | "critical";
@@ -1258,7 +1423,13 @@ function calculateHealthMetrics(
     severity = "critical";
   }
 
-  return { score, issues, severity, warnings: warningsReport };
+  return {
+    score,
+    maxScore,
+    grade,
+    severity,
+    warnings
+  };
 }
 
 

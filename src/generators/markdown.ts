@@ -21,7 +21,44 @@ async function writeMarkdown(
 
   md += `---\n\n`;
 
-  // Health Score Section
+  // Sync Health Section
+  md += `## 🔄 Schema Sync Health\n\n`;
+  const sync = healthMetrics.sync;
+
+  // Overall sync score
+  md += `**Overall Sync Score:** ${sync.overall.score}/100\n\n`;
+
+  // Category breakdown table
+  md += `### Category Breakdown\n\n`;
+  md += `| Category | Score | Issues |\n`;
+  md += `|----------|-------|--------|\n`;
+
+  const categories = [
+    sync.categories.tables,
+    sync.categories.columns,
+    sync.categories.indexes,
+    sync.categories.constraints,
+    sync.categories.other
+  ];
+
+  for (const cat of categories) {
+    const scoreDisplay = `${cat.score}/${cat.maxScore}`;
+    const issuesDisplay = cat.issues.length > 0
+      ? cat.issues.map(i => `• ${i}`).join('<br/>')
+      : '✅ None';
+    md += `| ${cat.label} | ${scoreDisplay} | ${issuesDisplay} |\n`;
+  }
+  md += `\n`;
+
+  md += `---\n\n`;
+
+  // Quality Scores Section
+  md += `## 🏥 Schema Quality\n\n`;
+
+  // Source quality
+  const sourceQuality = healthMetrics.sourceQuality;
+  const targetQuality = healthMetrics.targetQuality;
+
   const severityEmoji = {
     healthy: "✅",
     minor: "⚠️",
@@ -29,22 +66,13 @@ async function writeMarkdown(
     critical: "❌",
   };
 
-  md += `## 🏥 Schema Health Score\n\n`;
-  md += `**Score:** ${healthMetrics.score}/100 ${
-    severityEmoji[healthMetrics.severity]
-  }\n\n`;
-  md += `**Status:** ${
-    healthMetrics.severity.charAt(0).toUpperCase() +
-    healthMetrics.severity.slice(1)
-  }\n\n`;
+  md += `### Source Database\n\n`;
+  md += `**Score:** ${sourceQuality.score}/100 | **Grade:** ${sourceQuality.grade} ${severityEmoji[sourceQuality.severity]}\n\n`;
+  md += `**Warnings:** ${sourceQuality.warnings.totalWarnings} total (${sourceQuality.warnings.criticalCount} critical, ${sourceQuality.warnings.moderateCount} moderate, ${sourceQuality.warnings.minorCount} minor)\n\n`;
 
-  if (healthMetrics.issues.length > 0) {
-    md += `**Issues Detected:**\n\n`;
-    for (const issue of healthMetrics.issues) {
-      md += `- ${issue}\n`;
-    }
-    md += `\n`;
-  }
+  md += `### Target Database\n\n`;
+  md += `**Score:** ${targetQuality.score}/100 | **Grade:** ${targetQuality.grade} ${severityEmoji[targetQuality.severity]}\n\n`;
+  md += `**Warnings:** ${targetQuality.warnings.totalWarnings} total (${targetQuality.warnings.criticalCount} critical, ${targetQuality.warnings.moderateCount} moderate, ${targetQuality.warnings.minorCount} minor)\n\n`;
 
   md += `---\n\n`;
 
@@ -458,12 +486,15 @@ async function writeWarningReports(
   healthMetrics: HealthMetrics,
   outputDir: string
 ) {
-  if (!healthMetrics.warnings || healthMetrics.warnings.totalWarnings === 0) {
+  const sourceWarnings = healthMetrics.sourceQuality.warnings;
+  const targetWarnings = healthMetrics.targetQuality.warnings;
+
+  if (sourceWarnings.totalWarnings === 0 && targetWarnings.totalWarnings === 0) {
     return;
   }
 
   // Source warnings
-  if (healthMetrics.warnings.sourceWarnings.length > 0) {
+  if (sourceWarnings.sourceWarnings.length > 0) {
     const sourcePath = `${outputDir}/db-schema-warnings-source.md`;
     process.stdout.write(c.dim(`Writing source warnings...`));
 
@@ -473,27 +504,22 @@ async function writeWarningReports(
     md += `---\n\n`;
     md += `## Summary\n\n`;
 
-    const sourceWarnings = healthMetrics.warnings.sourceWarnings;
-    const criticalCount = sourceWarnings.filter(w => w.severity === 'critical').length;
-    const moderateCount = sourceWarnings.filter(w => w.severity === 'moderate').length;
-    const minorCount = sourceWarnings.filter(w => w.severity === 'minor').length;
-
-    md += `**Total Warnings:** ${sourceWarnings.length}\n\n`;
+    md += `**Total Warnings:** ${sourceWarnings.sourceWarnings.length}\n\n`;
     md += `| Severity | Count |\n`;
     md += `|----------|-------|\n`;
-    md += `| 🔴 Critical | ${criticalCount} |\n`;
-    md += `| 🟠 Moderate | ${moderateCount} |\n`;
-    md += `| 🟡 Minor | ${minorCount} |\n\n`;
+    md += `| 🔴 Critical | ${sourceWarnings.criticalCount} |\n`;
+    md += `| 🟠 Moderate | ${sourceWarnings.moderateCount} |\n`;
+    md += `| 🟡 Minor | ${sourceWarnings.minorCount} |\n\n`;
     md += `---\n\n`;
     md += `## Warnings by Table\n\n`;
-    md += formatWarnings(sourceWarnings);
+    md += formatWarnings(sourceWarnings.sourceWarnings);
 
     await Bun.write(sourcePath, md);
     console.log(` ${c.checkmark()} ${c.path(sourcePath)}`);
   }
 
   // Target warnings
-  if (healthMetrics.warnings.targetWarnings.length > 0) {
+  if (targetWarnings.targetWarnings.length > 0) {
     const targetPath = `${outputDir}/db-schema-warnings-target.md`;
     process.stdout.write(c.dim(`Writing target warnings...`));
 
@@ -503,20 +529,15 @@ async function writeWarningReports(
     md += `---\n\n`;
     md += `## Summary\n\n`;
 
-    const targetWarnings = healthMetrics.warnings.targetWarnings;
-    const criticalCount = targetWarnings.filter(w => w.severity === 'critical').length;
-    const moderateCount = targetWarnings.filter(w => w.severity === 'moderate').length;
-    const minorCount = targetWarnings.filter(w => w.severity === 'minor').length;
-
-    md += `**Total Warnings:** ${targetWarnings.length}\n\n`;
+    md += `**Total Warnings:** ${targetWarnings.targetWarnings.length}\n\n`;
     md += `| Severity | Count |\n`;
     md += `|----------|-------|\n`;
-    md += `| 🔴 Critical | ${criticalCount} |\n`;
-    md += `| 🟠 Moderate | ${moderateCount} |\n`;
-    md += `| 🟡 Minor | ${minorCount} |\n\n`;
+    md += `| 🔴 Critical | ${targetWarnings.criticalCount} |\n`;
+    md += `| 🟠 Moderate | ${targetWarnings.moderateCount} |\n`;
+    md += `| 🟡 Minor | ${targetWarnings.minorCount} |\n\n`;
     md += `---\n\n`;
     md += `## Warnings by Table\n\n`;
-    md += formatWarnings(targetWarnings);
+    md += formatWarnings(targetWarnings.targetWarnings);
 
     await Bun.write(targetPath, md);
     console.log(` ${c.checkmark()} ${c.path(targetPath)}`);

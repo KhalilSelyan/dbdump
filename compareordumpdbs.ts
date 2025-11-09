@@ -436,18 +436,67 @@ async function main() {
 
     // Print health summary to console
     console.log(`\n${divider()}`);
-    console.log(c.header(`SCHEMA HEALTH`));
+    console.log(c.header(`SCHEMA SYNC HEALTH`));
     console.log(divider());
 
-    const severityColor = healthMetrics!.severity === 'critical' ? c.critical :
-                          healthMetrics!.severity === 'moderate' ? c.moderate :
-                          healthMetrics!.severity === 'minor' ? c.minor : c.healthy;
+    const sync = healthMetrics!.sync;
+    const syncSeverity = sync.overall.score >= 90 ? 'healthy' :
+                         sync.overall.score >= 70 ? 'minor' :
+                         sync.overall.score >= 40 ? 'moderate' : 'critical';
+    const syncColor = syncSeverity === 'critical' ? c.critical :
+                      syncSeverity === 'moderate' ? c.moderate :
+                      syncSeverity === 'minor' ? c.minor : c.healthy;
 
-    console.log(`Score: ${c.count(healthMetrics!.score)}/100 (${severityColor(healthMetrics!.severity.toUpperCase())})`);
-    if (healthMetrics!.issues.length > 0) {
-      console.log(`\n${c.warning(`Issues:`)}`);
-      healthMetrics!.issues.forEach((issue) => console.log(c.dim(`  - ${issue}`)));
+    console.log(`Overall Sync: ${c.count(sync.overall.score)}/100 ${syncColor(sync.overall.score >= 90 ? '✓' : '⚠️')}`);
+
+    console.log(`\n${c.subheader('Category Breakdown:')}`);
+    const formatScore = (cat: any) => {
+      const icon = cat.score === 100 ? c.healthy('✓') : c.warning('⚠️');
+      const scoreStr = cat.score === 100 ? c.healthy(`${cat.score}/100`) : c.count(`${cat.score}/100`);
+      return `  ${cat.label.padEnd(12)} ${scoreStr} ${icon}`;
+    };
+
+    console.log(formatScore(sync.categories.tables));
+    console.log(formatScore(sync.categories.columns));
+    console.log(formatScore(sync.categories.indexes));
+    console.log(formatScore(sync.categories.constraints));
+    console.log(formatScore(sync.categories.other));
+
+    if (sync.overall.issues.length > 0) {
+      console.log(`\n${c.warning('Sync Issues:')}`);
+      sync.overall.issues.forEach((issue: string) => console.log(c.dim(`  - ${issue}`)));
     }
+
+    console.log(`\n${divider()}`);
+    console.log(c.header(`SCHEMA QUALITY`));
+    console.log(divider());
+
+    const formatQuality = (label: string, quality: any) => {
+      const gradeColor = quality.grade === 'A' ? c.healthy :
+                         quality.grade === 'B' ? c.healthy :
+                         quality.grade === 'C' ? c.warning :
+                         quality.grade === 'D' ? c.moderate :
+                         c.critical;
+      const severityLabel = quality.severity === 'healthy' ? 'Excellent' :
+                           quality.severity === 'minor' ? 'Good' :
+                           quality.severity === 'moderate' ? 'Needs Attention' :
+                           'Critical';
+
+      console.log(`${c.subheader(label)}: ${c.count(quality.score)}/100 (Grade: ${gradeColor(quality.grade)}) - ${severityLabel}`);
+      if (quality.warnings.totalWarnings > 0) {
+        let warningMsg = `  ${quality.warnings.totalWarnings} warning(s): ` +
+          `${quality.warnings.criticalCount} critical, ` +
+          `${quality.warnings.moderateCount} moderate, ` +
+          `${quality.warnings.minorCount} minor`;
+        if (quality.warnings.filteredCount) {
+          warningMsg += c.dim(` [${quality.warnings.filteredCount} filtered]`);
+        }
+        console.log(c.dim(warningMsg));
+      }
+    };
+
+    formatQuality('Source Database', healthMetrics!.sourceQuality);
+    formatQuality('\nTarget Database', healthMetrics!.targetQuality);
   } else if (dumpOnlyMode) {
     console.log(`\n${divider()}`);
     console.log(c.header("SCHEMA DUMP COMPLETE"));

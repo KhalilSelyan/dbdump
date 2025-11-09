@@ -202,11 +202,36 @@ export interface WarningConfig {
 // HEALTH AND SYNC TYPES
 // ============================================================
 
-export interface HealthMetrics {
+export interface CategoryScore {
   score: number;
+  maxScore: number;
+  label: string;
   issues: string[];
+}
+
+export interface SyncHealth {
+  overall: CategoryScore;
+  categories: {
+    tables: CategoryScore;
+    columns: CategoryScore;
+    indexes: CategoryScore;
+    constraints: CategoryScore;
+    other: CategoryScore; // functions, triggers, policies
+  };
+}
+
+export interface QualityScore {
+  score: number;
+  maxScore: number;
+  grade: "A" | "B" | "C" | "D" | "F";
   severity: "healthy" | "minor" | "moderate" | "critical";
-  warnings?: WarningsReport;
+  warnings: WarningsReport;
+}
+
+export interface HealthMetrics {
+  sync: SyncHealth;
+  sourceQuality: QualityScore;
+  targetQuality: QualityScore;
 }
 
 export interface SyncDirection {

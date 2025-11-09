@@ -1,4 +1,4 @@
-import type { AnalysisResult, HealthMetrics, SyncDirections, SchemaMetadata, TableInfo } from '../types';
+import type { AnalysisResult, HealthMetrics, SyncDirections, SchemaMetadata, TableInfo, SchemaWarning } from '../types';
 import { maskConnectionString } from '../utils';
 
 async function writeMarkdown(
@@ -408,7 +408,125 @@ function printSummary(result: AnalysisResult) {
   }
 }
 
+/**
+ * Format warnings for markdown output
+ */
+function formatWarnings(warnings: SchemaWarning[]): string {
+  let md = '';
+
+  // Group by table
+  const warningsByTable = new Map<string, SchemaWarning[]>();
+  for (const warning of warnings) {
+    if (!warningsByTable.has(warning.table)) {
+      warningsByTable.set(warning.table, []);
+    }
+    warningsByTable.get(warning.table)!.push(warning);
+  }
+
+  // Format each table's warnings
+  for (const [table, tableWarnings] of warningsByTable) {
+    md += `#### \`${table}\`\n\n`;
+
+    for (const warning of tableWarnings) {
+      const severityEmoji = {
+        minor: '🟡',
+        moderate: '🟠',
+        critical: '🔴'
+      };
+
+      md += `**${warning.type.replace(/_/g, ' ')}** ${severityEmoji[warning.severity]} (${warning.severity})\n`;
+      md += `- ${warning.message}\n`;
+
+      if (warning.details) {
+        if (Array.isArray(warning.details)) {
+          md += `- Affected items: \`${warning.details.join('`, `')}\`\n`;
+        } else if (typeof warning.details === 'object') {
+          md += `- Details: ${JSON.stringify(warning.details, null, 2)}\n`;
+        }
+      }
+
+      md += `- *Recommendation: ${warning.recommendation}*\n\n`;
+    }
+  }
+
+  return md;
+}
+
+/**
+ * Write separate warning files for source and target databases
+ */
+async function writeWarningReports(
+  sourceDb: string,
+  targetDb: string,
+  healthMetrics: HealthMetrics,
+  outputDir: string
+) {
+  if (!healthMetrics.warnings || healthMetrics.warnings.totalWarnings === 0) {
+    return;
+  }
+
+  // Source warnings
+  if (healthMetrics.warnings.sourceWarnings.length > 0) {
+    const sourcePath = `${outputDir}/db-schema-warnings-source.md`;
+    process.stdout.write(`Writing source warnings...`);
+
+    let md = `# Database Schema Warnings - Source\n\n`;
+    md += `**Database:** \`${maskConnectionString(sourceDb)}\`\n\n`;
+    md += `**Generated:** ${new Date().toLocaleString()}\n\n`;
+    md += `---\n\n`;
+    md += `## Summary\n\n`;
+
+    const sourceWarnings = healthMetrics.warnings.sourceWarnings;
+    const criticalCount = sourceWarnings.filter(w => w.severity === 'critical').length;
+    const moderateCount = sourceWarnings.filter(w => w.severity === 'moderate').length;
+    const minorCount = sourceWarnings.filter(w => w.severity === 'minor').length;
+
+    md += `**Total Warnings:** ${sourceWarnings.length}\n\n`;
+    md += `| Severity | Count |\n`;
+    md += `|----------|-------|\n`;
+    md += `| 🔴 Critical | ${criticalCount} |\n`;
+    md += `| 🟠 Moderate | ${moderateCount} |\n`;
+    md += `| 🟡 Minor | ${minorCount} |\n\n`;
+    md += `---\n\n`;
+    md += `## Warnings by Table\n\n`;
+    md += formatWarnings(sourceWarnings);
+
+    await Bun.write(sourcePath, md);
+    console.log(` ✓ ${sourcePath}`);
+  }
+
+  // Target warnings
+  if (healthMetrics.warnings.targetWarnings.length > 0) {
+    const targetPath = `${outputDir}/db-schema-warnings-target.md`;
+    process.stdout.write(`Writing target warnings...`);
+
+    let md = `# Database Schema Warnings - Target\n\n`;
+    md += `**Database:** \`${maskConnectionString(targetDb)}\`\n\n`;
+    md += `**Generated:** ${new Date().toLocaleString()}\n\n`;
+    md += `---\n\n`;
+    md += `## Summary\n\n`;
+
+    const targetWarnings = healthMetrics.warnings.targetWarnings;
+    const criticalCount = targetWarnings.filter(w => w.severity === 'critical').length;
+    const moderateCount = targetWarnings.filter(w => w.severity === 'moderate').length;
+    const minorCount = targetWarnings.filter(w => w.severity === 'minor').length;
+
+    md += `**Total Warnings:** ${targetWarnings.length}\n\n`;
+    md += `| Severity | Count |\n`;
+    md += `|----------|-------|\n`;
+    md += `| 🔴 Critical | ${criticalCount} |\n`;
+    md += `| 🟠 Moderate | ${moderateCount} |\n`;
+    md += `| 🟡 Minor | ${minorCount} |\n\n`;
+    md += `---\n\n`;
+    md += `## Warnings by Table\n\n`;
+    md += formatWarnings(targetWarnings);
+
+    await Bun.write(targetPath, md);
+    console.log(` ✓ ${targetPath}`);
+  }
+}
+
 // Main function
 
 
-export { writeMarkdown, printSummary };
+export { writeMarkdown, printSummary, writeWarningReports };

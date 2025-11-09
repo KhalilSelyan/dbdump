@@ -1,4 +1,5 @@
-import type { SchemaDiff, HealthMetrics, SyncDirections, SyncDirection } from './types';
+import type { SchemaDiff, HealthMetrics, SyncDirections, SyncDirection, SchemaMetadata } from './types';
+import { generateWarningsReport } from './warnings';
 
 function calculateSyncDirections(diff: SchemaDiff): SyncDirections {
   let sourceToTargetTables = 0;
@@ -1158,7 +1159,11 @@ function generateMigrationSQL(
 }
 
 
-function calculateHealthMetrics(diff: SchemaDiff): HealthMetrics {
+function calculateHealthMetrics(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata,
+  targetMetadata: SchemaMetadata
+): HealthMetrics {
   const issues: string[] = [];
   let score = 100;
 
@@ -1211,6 +1216,22 @@ function calculateHealthMetrics(diff: SchemaDiff): HealthMetrics {
     );
   }
 
+  // Generate warnings for schema issues
+  const warningsReport = generateWarningsReport(sourceMetadata, targetMetadata);
+
+  // Adjust score based on warnings
+  score -= warningsReport.criticalCount * 5;
+  score -= warningsReport.moderateCount * 2;
+  score -= warningsReport.minorCount * 1;
+
+  // Add warning summary to issues
+  if (warningsReport.totalWarnings > 0) {
+    issues.push(
+      `${warningsReport.totalWarnings} schema warning(s) detected ` +
+      `(${warningsReport.criticalCount} critical, ${warningsReport.moderateCount} moderate, ${warningsReport.minorCount} minor)`
+    );
+  }
+
   // Ensure score doesn't go below 0
   score = Math.max(0, score);
 
@@ -1226,7 +1247,7 @@ function calculateHealthMetrics(diff: SchemaDiff): HealthMetrics {
     severity = "critical";
   }
 
-  return { score, issues, severity };
+  return { score, issues, severity, warnings: warningsReport };
 }
 
 

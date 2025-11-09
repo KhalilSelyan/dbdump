@@ -12,7 +12,7 @@ import {
   generateFullDatabaseSQL,
   generateMigrationReadme
 } from './src/generators/sql';
-import { writeMarkdown, printSummary } from './src/generators/markdown';
+import { writeMarkdown, printSummary, writeWarningReports } from './src/generators/markdown';
 import { calculateHealthMetrics, calculateSyncDirections } from './src/health';
 import { parseArguments, printHelp, loadConfig } from './src/config';
 import { maskConnectionString } from './src/utils';
@@ -224,7 +224,7 @@ async function main() {
 
     // Calculate health metrics and sync directions
     console.log(`  Calculating health metrics...`);
-    healthMetrics = calculateHealthMetrics(diff);
+    healthMetrics = calculateHealthMetrics(diff, sourceMetadata, targetMetadata);
     syncDirections = calculateSyncDirections(diff);
 
     // Save history if requested
@@ -245,6 +245,14 @@ async function main() {
       healthMetrics,
       sourceMetadata.tables,
       targetMetadata.tables
+    );
+
+    // Write separate warning reports
+    await writeWarningReports(
+      sourceUrl,
+      targetUrl!,
+      healthMetrics,
+      outputDir
     );
 
     // Generate split SQL migration files

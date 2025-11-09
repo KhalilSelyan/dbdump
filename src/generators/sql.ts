@@ -162,6 +162,152 @@ function topologicalSort(graph: Map<string, Set<string>>): {
   return { sorted, hasCycles, remaining };
 }
 
+/**
+ * Find strongly connected components (cycles) in the dependency graph
+ * Returns groups of tables that have circular dependencies
+ */
+function findStronglyConnectedComponents(
+  graph: Map<string, Set<string>>
+): string[][] {
+  const visited = new Set<string>();
+  const stack: string[] = [];
+  const inStack = new Set<string>();
+  const components: string[][] = [];
+
+  function dfs(node: string, component: string[]): void {
+    visited.add(node);
+    inStack.add(node);
+    component.push(node);
+
+    const neighbors = graph.get(node) || new Set();
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        dfs(neighbor, component);
+      } else if (inStack.has(neighbor)) {
+        // Found a cycle - this component has circular dependency
+        component.push(neighbor);
+      }
+    }
+
+    inStack.delete(node);
+  }
+
+  for (const node of graph.keys()) {
+    if (!visited.has(node)) {
+      const component: string[] = [];
+      dfs(node, component);
+
+      // Only include components with more than 1 node or self-references
+      if (component.length > 1) {
+        // Check if there's actual circular dependency
+        const hasCircular = component.some(n => {
+          const deps = graph.get(n) || new Set();
+          return component.some(other => other !== n && deps.has(other));
+        });
+
+        if (hasCircular) {
+          components.push([...new Set(component)]); // Remove duplicates
+        }
+      } else if (component.length === 1) {
+        // Check for self-reference
+        const node = component[0];
+        const deps = graph.get(node) || new Set();
+        if (deps.has(node)) {
+          components.push(component);
+        }
+      }
+    }
+  }
+
+  return components;
+}
+
+/**
+ * Generate SQL for tables with circular dependencies
+ * Creates tables in two phases: tables without FKs, then add FKs with DEFERRABLE
+ */
+function generateCircularDependencySQL(
+  circularTables: Set<string>,
+  metadata: SchemaMetadata,
+  cycles: string[][]
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- CIRCULAR DEPENDENCY HANDLING\n`;
+  sql += `-- Tables with circular foreign key dependencies\n`;
+  sql += `-- ============================================================\n\n`;
+
+  sql += `-- ⚠️  WARNING: Circular dependencies detected!\n`;
+  sql += `-- The following dependency cycles were found:\n`;
+  for (let i = 0; i < cycles.length; i++) {
+    sql += `--   Cycle ${i + 1}: ${cycles[i].join(' → ')} → ${cycles[i][0]}\n`;
+  }
+  sql += `--\n`;
+  sql += `-- These tables will be created in two phases:\n`;
+  sql += `--   1. Create table structures (without foreign keys)\n`;
+  sql += `--   2. Add foreign keys with DEFERRABLE INITIALLY DEFERRED\n\n`;
+
+  // Phase 1: Create tables without foreign keys
+  sql += `-- ============================================================\n`;
+  sql += `-- PHASE 1: Create table structures (without foreign keys)\n`;
+  sql += `-- ============================================================\n\n`;
+
+  for (const tableKey of circularTables) {
+    const tableInfo = metadata.tables.get(tableKey);
+    if (!tableInfo) continue;
+
+    const [schema, table] = tableKey.split('.');
+    sql += `-- Table: ${schema}.${table} (part of circular dependency)\n`;
+    sql += `CREATE TABLE IF NOT EXISTS "${schema}"."${table}" (\n`;
+
+    const columnDefs: string[] = [];
+    for (const col of tableInfo.columns) {
+      columnDefs.push(`  ${formatColumnDefinition(col)}`);
+    }
+
+    sql += columnDefs.join(',\n');
+    sql += `\n);\n\n`;
+
+    // Set sequence ownership
+    if (tableInfo.sequences.length > 0) {
+      for (const seq of tableInfo.sequences) {
+        for (const col of tableInfo.columns) {
+          if (col.column_default?.includes(seq.sequence_name)) {
+            sql += `ALTER SEQUENCE "${seq.sequence_schema}"."${seq.sequence_name}" OWNED BY "${schema}"."${table}"."${col.column_name}";\n\n`;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Phase 2: Add foreign keys with DEFERRABLE
+  sql += `-- ============================================================\n`;
+  sql += `-- PHASE 2: Add foreign keys with DEFERRABLE constraints\n`;
+  sql += `-- ============================================================\n\n`;
+
+  sql += `-- ℹ️  DEFERRABLE INITIALLY DEFERRED constraints are checked at\n`;
+  sql += `-- transaction COMMIT time, allowing circular references to work.\n\n`;
+
+  for (const tableKey of circularTables) {
+    const tableInfo = metadata.tables.get(tableKey);
+    if (!tableInfo || tableInfo.foreignKeys.length === 0) continue;
+
+    const [schema, table] = tableKey.split('.');
+
+    sql += `-- Foreign keys for: ${schema}.${table}\n`;
+    for (const fk of tableInfo.foreignKeys) {
+      sql += `ALTER TABLE "${schema}"."${table}" ADD CONSTRAINT "${fk.constraint_name}" `;
+      sql += `FOREIGN KEY ("${fk.column_name}") `;
+      sql += `REFERENCES "${fk.foreign_table_schema}"."${fk.foreign_table_name}"("${fk.foreign_column_name}") `;
+      sql += `ON DELETE ${fk.on_delete} ON UPDATE ${fk.on_update} `;
+      sql += `DEFERRABLE INITIALLY DEFERRED;\n`;
+    }
+    sql += `\n`;
+  }
+
+  return sql;
+}
+
 function formatColumnDefinition(col: ColumnInfo, includeDefault: boolean = true): string {
   let colDef = `"${col.column_name}" `;
 
@@ -311,7 +457,8 @@ function generateSequencesSQL(
 function generateTablesSQL(
   diff: SchemaDiff,
   sourceMetadata: SchemaMetadata,
-  sortByDependencies: boolean = true
+  sortByDependencies: boolean = true,
+  handleCircularDeps: boolean = true
 ): string {
   let sql = `-- ============================================================\n`;
   sql += `-- TABLES\n`;
@@ -323,6 +470,7 @@ function generateTablesSQL(
 
   // Determine table creation order
   let tablesToCreate = diff.tablesOnlyInSource;
+  let circularDepSQL = '';
 
   if (sortByDependencies && tablesToCreate.length > 0) {
     // Build dependency graph
@@ -331,34 +479,73 @@ function generateTablesSQL(
     // Topologically sort
     const { sorted, hasCycles, remaining } = topologicalSort(graph);
 
-    if (hasCycles) {
+    if (hasCycles && handleCircularDeps) {
+      // Find specific cycles
+      const cycles = findStronglyConnectedComponents(graph);
+      const circularTables = new Set(remaining);
+
+      // Generate special handling for circular dependencies
+      circularDepSQL = generateCircularDependencySQL(circularTables, sourceMetadata, cycles);
+
+      // Remove circular tables from normal creation
+      const sortedTables: Array<{ schema: string; table: string }> = [];
+      for (const tableKey of sorted) {
+        if (!circularTables.has(tableKey)) {
+          const [schema, table] = tableKey.split('.');
+          sortedTables.push({ schema, table });
+        }
+      }
+
+      tablesToCreate = sortedTables;
+
+      if (sorted.length > 0) {
+        sql += `-- ℹ️  Tables ordered by foreign key dependencies\n`;
+        sql += `-- Tables with no dependencies are created first\n`;
+        sql += `-- (Circular dependency tables are handled separately at the end)\n\n`;
+      }
+    } else if (hasCycles && !handleCircularDeps) {
+      // Just warn but create normally
       sql += `-- ⚠️  WARNING: Circular dependencies detected!\n`;
       sql += `-- The following tables have circular foreign key relationships:\n`;
       for (const tableKey of remaining) {
         sql += `--   - ${tableKey}\n`;
       }
-      sql += `-- These will be created at the end. You may need DEFERRABLE constraints.\n\n`;
-    }
+      sql += `-- Consider using --handleCircularDeps to automatically handle these.\n\n`;
 
-    // Convert sorted keys back to table references
-    const sortedTables: Array<{ schema: string; table: string }> = [];
-    const remainingTables: Array<{ schema: string; table: string }> = [];
+      // Convert all tables
+      const sortedTables: Array<{ schema: string; table: string }> = [];
+      const remainingTables: Array<{ schema: string; table: string }> = [];
 
-    for (const tableKey of sorted) {
-      const [schema, table] = tableKey.split('.');
-      sortedTables.push({ schema, table });
-    }
+      for (const tableKey of sorted) {
+        const [schema, table] = tableKey.split('.');
+        sortedTables.push({ schema, table });
+      }
 
-    for (const tableKey of remaining) {
-      const [schema, table] = tableKey.split('.');
-      remainingTables.push({ schema, table });
-    }
+      for (const tableKey of remaining) {
+        const [schema, table] = tableKey.split('.');
+        remainingTables.push({ schema, table });
+      }
 
-    tablesToCreate = [...sortedTables, ...remainingTables];
+      tablesToCreate = [...sortedTables, ...remainingTables];
 
-    if (sorted.length > 0) {
-      sql += `-- ℹ️  Tables ordered by foreign key dependencies\n`;
-      sql += `-- Tables with no dependencies are created first\n\n`;
+      if (sorted.length > 0) {
+        sql += `-- ℹ️  Tables ordered by foreign key dependencies\n`;
+        sql += `-- Tables with no dependencies are created first\n\n`;
+      }
+    } else {
+      // No cycles, proceed normally
+      const sortedTables: Array<{ schema: string; table: string }> = [];
+      for (const tableKey of sorted) {
+        const [schema, table] = tableKey.split('.');
+        sortedTables.push({ schema, table });
+      }
+
+      tablesToCreate = sortedTables;
+
+      if (sorted.length > 0) {
+        sql += `-- ℹ️  Tables ordered by foreign key dependencies\n`;
+        sql += `-- Tables with no dependencies are created first\n\n`;
+      }
     }
   }
 
@@ -403,6 +590,12 @@ function generateTablesSQL(
       }
       sql += `\n`;
     }
+  }
+
+  // Append circular dependency handling if any
+  if (circularDepSQL) {
+    sql += circularDepSQL;
+    hasTables = true;
   }
 
   return hasTables ? sql : `-- No tables to create or modify\n\n`;
@@ -691,7 +884,8 @@ function generateFullDatabaseSQL(
   metadata: SchemaMetadata,
   dbLabel: string,
   transactionScope: TransactionScope = 'none',
-  sortByDependencies: boolean = true
+  sortByDependencies: boolean = true,
+  handleCircularDeps: boolean = true
 ): SplitMigrationFiles {
   const header = `-- Full Schema Dump: ${dbLabel}\n-- Generated: ${new Date().toLocaleString()}\n-- This file contains the complete schema for recreating the database\n\n`;
 
@@ -722,7 +916,7 @@ function generateFullDatabaseSQL(
   const files: Record<string, string> = {
     '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(metadata, emptyMetadata),
     '2-sequences': header + generateSequencesSQL(fullDiff, metadata),
-    '3-tables': header + generateTablesSQL(fullDiff, metadata, sortByDependencies),
+    '3-tables': header + generateTablesSQL(fullDiff, metadata, sortByDependencies, handleCircularDeps),
     '4-indexes': header + generateIndexesSQL(fullDiff, metadata),
     '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(fullDiff, metadata),
     '6-triggers': header + generateTriggersSQL(fullDiff, metadata, emptyMetadata),
@@ -768,7 +962,8 @@ function generateSplitMigrationSQL(
   targetMetadata: SchemaMetadata,
   direction: "source-to-target" | "target-to-source",
   transactionScope: TransactionScope = 'none',
-  sortByDependencies: boolean = true
+  sortByDependencies: boolean = true,
+  handleCircularDeps: boolean = true
 ): SplitMigrationFiles {
   const isSourceToTarget = direction === "source-to-target";
   const sourceMetadataToUse = isSourceToTarget ? sourceMetadata : targetMetadata;
@@ -782,7 +977,7 @@ function generateSplitMigrationSQL(
   const files: Record<string, string> = {
     '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(sourceMetadataToUse, targetMetadataToUse),
     '2-sequences': header + generateSequencesSQL(diff, sourceMetadataToUse),
-    '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse, sortByDependencies),
+    '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse, sortByDependencies, handleCircularDeps),
     '4-indexes': header + generateIndexesSQL(diff, sourceMetadataToUse),
     '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(diff, sourceMetadataToUse, isSourceToTarget),
     '6-triggers': header + generateTriggersSQL(diff, sourceMetadataToUse, targetMetadataToUse),

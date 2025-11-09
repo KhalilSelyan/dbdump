@@ -267,6 +267,7 @@ export interface CLIArgs {
   useTransactions?: boolean;
   transactionScope?: string;
   sortDependencies?: boolean;
+  handleCircularDeps?: boolean;
   help?: boolean;
 }
 

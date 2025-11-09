@@ -72,6 +72,10 @@ function parseArguments() {
         type: "boolean",
         default: true,
       },
+      handleCircularDeps: {
+        type: "boolean",
+        default: true,
+      },
       help: {
         type: "boolean",
         short: "h",
@@ -149,6 +153,9 @@ ${colors.bright}${colors.blue}⚡ ADVANCED SQL OPTIONS:${colors.reset}
   ${colors.green}--sortDependencies${colors.reset}         Order tables by foreign key dependencies ${colors.gray}(default: on)${colors.reset}
                              ${colors.dim}Automatically orders table creation to satisfy FK constraints${colors.reset}
                              ${colors.dim}Use --sortDependencies=false to disable${colors.reset}
+  ${colors.green}--handleCircularDeps${colors.reset}       Handle circular FK dependencies with DEFERRABLE ${colors.gray}(default: on)${colors.reset}
+                             ${colors.dim}Creates tables in 2 phases: structure first, then deferred FKs${colors.reset}
+                             ${colors.dim}Use --handleCircularDeps=false to disable${colors.reset}
 
 ${colors.bright}${colors.blue}❓ OTHER:${colors.reset}
   ${colors.green}-h, --help${colors.reset}                 Show this help message

@@ -157,6 +157,14 @@ ${colors.bright}${colors.blue}⚡ ADVANCED SQL OPTIONS:${colors.reset}
                              ${colors.dim}Creates tables in 2 phases: structure first, then deferred FKs${colors.reset}
                              ${colors.dim}Use --handleCircularDeps=false to disable${colors.reset}
 
+${colors.bright}${colors.blue}🔄 ROLLBACK/CLEANUP OPTIONS:${colors.reset}
+  ${colors.green}--generateCleanupSQL${colors.reset}       Generate rollback scripts to undo migrations ${colors.gray}(default: off)${colors.reset}
+                             ${colors.dim}Creates rollback-* directories with reverse migration scripts${colors.reset}
+                             ${colors.red}⚠️  These scripts DROP tables/columns - use with caution!${colors.reset}
+  ${colors.green}--cleanupDryRun${colors.reset}            Dry-run mode for cleanup scripts ${colors.gray}(default: on)${colors.reset}
+                             ${colors.dim}When enabled, all DROP statements are commented out${colors.reset}
+                             ${colors.dim}Use --cleanupDryRun=false to enable actual execution${colors.reset}
+
 ${colors.bright}${colors.blue}❓ OTHER:${colors.reset}
   ${colors.green}-h, --help${colors.reset}                 Show this help message
 

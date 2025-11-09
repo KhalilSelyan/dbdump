@@ -11,10 +11,10 @@ import {
   generateSplitMigrationSQL,
   generateFullDatabaseSQL,
   generateMigrationReadme,
+  generateRollbackSQL,
   type TransactionScope
 } from './src/generators/sql';
 import { writeMarkdown, printSummary, writeWarningReports } from './src/generators/markdown';
-import { generateCleanupScripts } from './src/generators/cleanup';
 import { calculateHealthMetrics, calculateSyncDirections } from './src/health';
 import { loadCompleteWarningConfig } from './src/config-loader';
 import { parseArguments, printHelp, loadConfig } from './src/config';
@@ -330,28 +330,59 @@ async function main() {
     console.log(`    ${c.checkmark()} ${c.path(readmePath)}`);
   }
 
-  // Generate cleanup scripts if requested
-  if (args.generateCleanupSQL && !dumpOnlyMode && healthMetrics?.warnings) {
-    console.log(`\n${c.subheader(`Generating cleanup scripts...`)}`);
+  // Generate rollback/cleanup scripts if requested
+  if (args.generateCleanupSQL && !dumpOnlyMode) {
+    console.log(`\n${c.subheader(`Generating rollback/cleanup scripts...`)}`);
 
     const dryRun = args.cleanupDryRun !== false; // default to true
-    const cleanupScripts = generateCleanupScripts(
+    if (dryRun) {
+      console.log(c.warning(`  ⚠️  DRY-RUN MODE: DROP statements will be commented out`));
+      console.log(c.info(`  To enable actual execution, use: --cleanupDryRun=false`));
+    } else {
+      console.log(c.error(`  ⚠️  DRY-RUN DISABLED: DROP statements will execute!`));
+    }
+
+    // Generate rollback for source→target migration
+    const rollbackSourceToTarget = generateRollbackSQL(
       diff,
       sourceMetadata,
       targetMetadata,
-      healthMetrics.warnings.sourceWarnings,
-      healthMetrics.warnings.targetWarnings,
+      "source-to-target",
       dryRun
     );
 
-    const cleanupSourcePath = `${outputDir}/cleanup-source.sql`;
-    const cleanupTargetPath = `${outputDir}/cleanup-target.sql`;
+    // Generate rollback for target→source migration
+    const rollbackTargetToSource = generateRollbackSQL(
+      diff,
+      sourceMetadata,
+      targetMetadata,
+      "target-to-source",
+      dryRun
+    );
 
-    await Bun.write(cleanupSourcePath, cleanupScripts.source);
-    console.log(`  ${c.checkmark()} ${c.path(cleanupSourcePath)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
+    // Create subdirectories for rollback scripts
+    const rollbackSourceToTargetDir = `${outputDir}/rollback-source-to-target`;
+    const rollbackTargetToSourceDir = `${outputDir}/rollback-target-to-source`;
 
-    await Bun.write(cleanupTargetPath, cleanupScripts.target);
-    console.log(`  ${c.checkmark()} ${c.path(cleanupTargetPath)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
+    // Write source→target rollback files
+    console.log(`\n  ${c.info(`Rollback Source ${c.arrow()} Target:`)}`);
+    await Bun.write(`${rollbackSourceToTargetDir}/.gitkeep`, "");
+    for (const [key, sql] of Object.entries(rollbackSourceToTarget)) {
+      const filename = `${rollbackSourceToTargetDir}/${key}.sql`;
+      await Bun.write(filename, sql);
+      console.log(`    ${c.checkmark()} ${c.path(filename)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
+    }
+
+    // Write target→source rollback files
+    console.log(`\n  ${c.info(`Rollback Target ${c.arrow()} Source:`)}`);
+    await Bun.write(`${rollbackTargetToSourceDir}/.gitkeep`, "");
+    for (const [key, sql] of Object.entries(rollbackTargetToSource)) {
+      const filename = `${rollbackTargetToSourceDir}/${key}.sql`;
+      await Bun.write(filename, sql);
+      console.log(`    ${c.checkmark()} ${c.path(filename)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
+    }
+
+    console.log(c.info(`\n  💡 Execute rollback files in reverse order (7→6→5→4→3→2→1)`));
   }
 
   // Generate full database migrations if requested

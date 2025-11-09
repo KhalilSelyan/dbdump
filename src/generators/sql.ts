@@ -1641,10 +1641,257 @@ function calculateHealthMetrics(diff: SchemaDiff): HealthMetrics {
   return { score, issues, severity };
 }
 
+/**
+ * Generate rollback/cleanup SQL to reverse a migration
+ * Creates scripts numbered in reverse (7→1) to undo changes in proper order
+ */
+function generateRollbackSQL(
+  diff: SchemaDiff,
+  sourceMetadata: SchemaMetadata,
+  targetMetadata: SchemaMetadata,
+  direction: "source-to-target" | "target-to-source",
+  dryRun: boolean = true
+): SplitMigrationFiles {
+  const isSourceToTarget = direction === "source-to-target";
+  const metadataToRollback = isSourceToTarget ? sourceMetadata : targetMetadata;
+
+  const header = `-- ============================================================
+-- ROLLBACK/CLEANUP SQL: ${direction}
+-- Generated: ${new Date().toLocaleString()}
+-- ============================================================
+--
+-- ⚠️  WARNING: DESTRUCTIVE OPERATIONS
+-- This script will REMOVE schema elements that were added by the migration.
+-- ${dryRun ? 'Currently in DRY-RUN mode - statements are commented out.' : 'DRY-RUN DISABLED - Statements will execute!'}
+--
+-- Data Loss Risk:
+--   - Dropping tables will DELETE ALL DATA in those tables
+--   - Dropping columns will DELETE ALL DATA in those columns
+--   - These operations are IRREVERSIBLE
+--
+-- Before running:
+--   1. BACKUP your database
+--   2. Review each statement carefully
+--   3. Consider running in a transaction (BEGIN; ... ROLLBACK;)
+--   4. Verify row counts before dropping tables
+--
+-- To enable actual execution, run with: --cleanupDryRun=false
+--
+-- Execute files in THIS ORDER (reverse of migration):
+--   7-policies.sql → 6-triggers.sql → 5-constraints-foreign-keys.sql
+--   → 4-indexes.sql → 3-tables.sql → 2-sequences.sql → 1-extensions-enums-functions.sql
+--
+-- ============================================================\n\n`;
+
+  const commentPrefix = dryRun ? '-- [DRY-RUN] ' : '';
+
+  // Generate rollback SQL for each category (in reverse order of creation)
+
+  // 7. Policies (disable RLS and drop policies)
+  let policiesSQL = '';
+  for (const tableDiff of diff.tablesInBoth) {
+    const tableKey = `${tableDiff.table_schema}.${tableDiff.table_name}`;
+    const tableInfo = metadataToRollback.tables.get(tableKey);
+
+    if (tableInfo && tableInfo.policies.length > 0) {
+      policiesSQL += `-- Rollback policies for: ${tableKey}\n`;
+
+      for (const policy of tableInfo.policies) {
+        policiesSQL += `${commentPrefix}DROP POLICY IF EXISTS "${policy.policy_name}" ON "${tableDiff.table_schema}"."${tableDiff.table_name}";\n`;
+      }
+
+      policiesSQL += `${commentPrefix}ALTER TABLE "${tableDiff.table_schema}"."${tableDiff.table_name}" DISABLE ROW LEVEL SECURITY;\n\n`;
+    }
+  }
+
+  // 6. Triggers
+  let triggersSQL = '';
+  for (const tableDiff of diff.tablesInBoth) {
+    const tableKey = `${tableDiff.table_schema}.${tableDiff.table_name}`;
+    const tableInfo = metadataToRollback.tables.get(tableKey);
+
+    if (tableInfo && tableInfo.triggers.length > 0) {
+      triggersSQL += `-- Rollback triggers for: ${tableKey}\n`;
+
+      for (const trigger of tableInfo.triggers) {
+        triggersSQL += `${commentPrefix}DROP TRIGGER IF EXISTS "${trigger.trigger_name}" ON "${tableDiff.table_schema}"."${tableDiff.table_name}";\n`;
+      }
+      triggersSQL += '\n';
+    }
+  }
+
+  // 5. Constraints and Foreign Keys
+  let constraintsSQL = '';
+  for (const tableDiff of diff.tablesInBoth) {
+    const tableKey = `${tableDiff.table_schema}.${tableDiff.table_name}`;
+    const tableInfo = metadataToRollback.tables.get(tableKey);
+
+    if (tableInfo) {
+      let hasConstraints = false;
+
+      if (tableInfo.foreignKeys.length > 0) {
+        if (!hasConstraints) {
+          constraintsSQL += `-- Rollback constraints for: ${tableKey}\n`;
+          hasConstraints = true;
+        }
+
+        for (const fk of tableInfo.foreignKeys) {
+          constraintsSQL += `${commentPrefix}ALTER TABLE "${tableDiff.table_schema}"."${tableDiff.table_name}" DROP CONSTRAINT IF EXISTS "${fk.constraint_name}";\n`;
+        }
+      }
+
+      if (tableInfo.constraints.length > 0) {
+        if (!hasConstraints) {
+          constraintsSQL += `-- Rollback constraints for: ${tableKey}\n`;
+          hasConstraints = true;
+        }
+
+        for (const constraint of tableInfo.constraints) {
+          if (constraint.constraint_type !== 'PRIMARY KEY') {
+            constraintsSQL += `${commentPrefix}ALTER TABLE "${tableDiff.table_schema}"."${tableDiff.table_name}" DROP CONSTRAINT IF EXISTS "${constraint.constraint_name}";\n`;
+          }
+        }
+      }
+
+      if (hasConstraints) {
+        constraintsSQL += '\n';
+      }
+    }
+  }
+
+  // 4. Indexes
+  let indexesSQL = '';
+  for (const tableDiff of diff.tablesInBoth) {
+    const tableKey = `${tableDiff.table_schema}.${tableDiff.table_name}`;
+    const tableInfo = metadataToRollback.tables.get(tableKey);
+
+    if (tableInfo && tableInfo.indexes.length > 0) {
+      indexesSQL += `-- Rollback indexes for: ${tableKey}\n`;
+
+      for (const index of tableInfo.indexes) {
+        if (!index.is_primary) {
+          indexesSQL += `${commentPrefix}DROP INDEX IF EXISTS "${tableDiff.table_schema}"."${index.index_name}";\n`;
+        }
+      }
+      indexesSQL += '\n';
+    }
+  }
+
+  // 3. Tables (most dangerous - includes row count check)
+  let tablesSQL = '';
+  const tablesToDrop = isSourceToTarget ? diff.tablesOnlyInSource : diff.tablesOnlyInTarget;
+
+  if (tablesToDrop.length > 0) {
+    tablesSQL += `-- ============================================================\n`;
+    tablesSQL += `-- DROP TABLES\n`;
+    tablesSQL += `-- ⚠️  CRITICAL: These operations will DELETE ALL DATA\n`;
+    tablesSQL += `-- ============================================================\n\n`;
+
+    for (const table of tablesToDrop) {
+      const tableKey = `${table.schema}.${table.table}`;
+
+      tablesSQL += `-- Table: ${tableKey}\n`;
+      tablesSQL += `-- Check row count before dropping:\n`;
+      tablesSQL += `-- SELECT COUNT(*) FROM "${table.schema}"."${table.table}";\n`;
+      tablesSQL += `${commentPrefix}DROP TABLE IF EXISTS "${table.schema}"."${table.table}" CASCADE;\n\n`;
+    }
+  }
+
+  // Also drop columns that were added
+  for (const tableDiff of diff.tablesInBoth) {
+    if (tableDiff.columnsOnlyInSource.length > 0) {
+      tablesSQL += `-- Drop columns added to: ${tableDiff.table_schema}.${tableDiff.table_name}\n`;
+
+      for (const col of tableDiff.columnsOnlyInSource) {
+        tablesSQL += `-- ⚠️  Dropping column will delete all data in that column\n`;
+        tablesSQL += `${commentPrefix}ALTER TABLE "${tableDiff.table_schema}"."${tableDiff.table_name}" DROP COLUMN IF EXISTS "${col.column_name}" CASCADE;\n`;
+      }
+      tablesSQL += '\n';
+    }
+  }
+
+  // 2. Sequences
+  let sequencesSQL = '';
+  for (const tableDiff of diff.tablesInBoth) {
+    const tableKey = `${tableDiff.table_schema}.${tableDiff.table_name}`;
+    const tableInfo = metadataToRollback.tables.get(tableKey);
+
+    if (tableInfo && tableInfo.sequences.length > 0) {
+      sequencesSQL += `-- Rollback sequences for: ${tableKey}\n`;
+
+      for (const seq of tableInfo.sequences) {
+        sequencesSQL += `${commentPrefix}DROP SEQUENCE IF EXISTS "${seq.sequence_schema}"."${seq.sequence_name}" CASCADE;\n`;
+      }
+      sequencesSQL += '\n';
+    }
+  }
+
+  // 1. Extensions, ENUMs, Functions (least destructive, but still careful)
+  let extensionsSQL = '';
+
+  // Determine which metadata to check against (opposite of rollback metadata)
+  const comparisonMetadata = isSourceToTarget ? targetMetadata : sourceMetadata;
+
+  // Drop functions
+  for (const func of metadataToRollback.functions) {
+    const existsInComparison = comparisonMetadata?.functions.some(
+      f => f.schema === func.schema && f.name === func.name
+    );
+
+    if (!existsInComparison) {
+      extensionsSQL += `${commentPrefix}DROP FUNCTION IF EXISTS "${func.schema}"."${func.name}"(${func.argument_types}) CASCADE;\n`;
+    }
+  }
+
+  if (metadataToRollback.functions.length > 0) {
+    extensionsSQL += '\n';
+  }
+
+  // Drop ENUMs
+  for (const enumType of metadataToRollback.enums) {
+    const existsInComparison = comparisonMetadata?.enums.some(
+      e => e.schema === enumType.schema && e.name === enumType.name
+    );
+
+    if (!existsInComparison) {
+      extensionsSQL += `${commentPrefix}DROP TYPE IF EXISTS "${enumType.schema}"."${enumType.name}" CASCADE;\n`;
+    }
+  }
+
+  if (metadataToRollback.enums.length > 0) {
+    extensionsSQL += '\n';
+  }
+
+  // Note about extensions (usually shouldn't drop)
+  if (metadataToRollback.extensions.length > 0) {
+    extensionsSQL += `-- ℹ️  Extensions are typically NOT dropped in rollback\n`;
+    extensionsSQL += `-- They may be used by other databases or schemas\n`;
+    extensionsSQL += `-- Uncomment only if you're certain:\n`;
+
+    for (const ext of metadataToRollback.extensions) {
+      extensionsSQL += `-- ${commentPrefix}DROP EXTENSION IF EXISTS "${ext}" CASCADE;\n`;
+    }
+    extensionsSQL += '\n';
+  }
+
+  // Build files in reverse order (7→1)
+  const files = {
+    '7-policies': header + (policiesSQL || '-- No policies to rollback\n'),
+    '6-triggers': header + (triggersSQL || '-- No triggers to rollback\n'),
+    '5-constraints-foreign-keys': header + (constraintsSQL || '-- No constraints to rollback\n'),
+    '4-indexes': header + (indexesSQL || '-- No indexes to rollback\n'),
+    '3-tables': header + (tablesSQL || '-- No tables or columns to rollback\n'),
+    '2-sequences': header + (sequencesSQL || '-- No sequences to rollback\n'),
+    '1-extensions-enums-functions': header + (extensionsSQL || '-- No extensions/enums/functions to rollback\n'),
+  };
+
+  return files as SplitMigrationFiles;
+}
+
 // Write Markdown output
 
 
-export { 
+export {
   generateSequencesSQL,
   generateTablesSQL,
   generateIndexesSQL,
@@ -1654,5 +1901,6 @@ export {
   generateExtensionsEnumsFunctionsSQL,
   generateFullDatabaseSQL,
   generateSplitMigrationSQL,
-  generateMigrationReadme
+  generateMigrationReadme,
+  generateRollbackSQL
 };

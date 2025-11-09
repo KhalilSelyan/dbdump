@@ -264,6 +264,8 @@ export interface CLIArgs {
   generateCleanupSQL?: boolean;
   cleanupDryRun?: boolean;
   saveHistory?: boolean;
+  useTransactions?: boolean;
+  transactionScope?: string;
   help?: boolean;
 }
 

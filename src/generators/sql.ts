@@ -1,6 +1,60 @@
 import type { SchemaDiff, SchemaMetadata, TableInfo, SplitMigrationFiles } from './types';
 import { formatColumnDefinition } from '../utils';
 
+/**
+ * Transaction scope options
+ */
+export type TransactionScope = 'per-file' | 'single' | 'none';
+
+/**
+ * Wrap SQL content in a transaction block
+ */
+export function wrapInTransaction(sql: string, label: string, scope: TransactionScope, fileNumber: number, totalFiles: number): string {
+  if (scope === 'none') {
+    return sql;
+  }
+
+  if (scope === 'per-file') {
+    return `-- ============================================================
+-- Transaction: ${label}
+-- ============================================================
+BEGIN;
+
+${sql}
+
+COMMIT;
+
+-- If any error occurs, all changes in this transaction will be rolled back
+`;
+  }
+
+  // Single transaction mode
+  if (fileNumber === 1) {
+    // Start transaction in first file
+    return `-- ============================================================
+-- BEGIN SINGLE TRANSACTION
+-- All migration files must be executed in the same session
+-- ============================================================
+BEGIN;
+
+${sql}`;
+  } else if (fileNumber === totalFiles) {
+    // End transaction in last file
+    return `${sql}
+
+-- ============================================================
+-- COMMIT SINGLE TRANSACTION
+-- ============================================================
+COMMIT;
+
+-- Transaction complete - all changes committed atomically
+`;
+  } else {
+    // Middle files - no transaction boundaries
+    return sql;
+  }
+}
+
 function formatColumnDefinition(col: ColumnInfo, includeDefault: boolean = true): string {
   let colDef = `"${col.column_name}" `;
 
@@ -485,7 +539,8 @@ function generatePoliciesSQL(
 // Generate full database schema SQL (for cloning entire database)
 function generateFullDatabaseSQL(
   metadata: SchemaMetadata,
-  dbLabel: string
+  dbLabel: string,
+  transactionScope: TransactionScope = 'none'
 ): SplitMigrationFiles {
   const header = `-- Full Schema Dump: ${dbLabel}\n-- Generated: ${new Date().toLocaleString()}\n-- This file contains the complete schema for recreating the database\n\n`;
 
@@ -510,7 +565,10 @@ function generateFullDatabaseSQL(
     functions: []
   };
 
-  return {
+  const totalFiles = 7;
+
+  // Generate SQL for each file
+  const files: Record<string, string> = {
     '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(metadata, emptyMetadata),
     '2-sequences': header + generateSequencesSQL(fullDiff, metadata),
     '3-tables': header + generateTablesSQL(fullDiff, metadata),
@@ -519,6 +577,27 @@ function generateFullDatabaseSQL(
     '6-triggers': header + generateTriggersSQL(fullDiff, metadata, emptyMetadata),
     '7-policies': header + generatePoliciesSQL(fullDiff, metadata, emptyMetadata),
   };
+
+  // Apply transaction wrapping if enabled
+  if (transactionScope !== 'none') {
+    const labels = [
+      'Extensions, ENUMs, and Functions',
+      'Sequences',
+      'Tables',
+      'Indexes',
+      'Constraints and Foreign Keys',
+      'Triggers',
+      'RLS Policies'
+    ];
+
+    let fileIndex = 0;
+    for (const [key, sql] of Object.entries(files)) {
+      fileIndex++;
+      files[key] = wrapInTransaction(sql, labels[fileIndex - 1], transactionScope, fileIndex, totalFiles);
+    }
+  }
+
+  return files as SplitMigrationFiles;
 }
 
 // Generate split migration SQL files (7 files per direction)
@@ -536,7 +615,8 @@ function generateSplitMigrationSQL(
   diff: SchemaDiff,
   sourceMetadata: SchemaMetadata,
   targetMetadata: SchemaMetadata,
-  direction: "source-to-target" | "target-to-source"
+  direction: "source-to-target" | "target-to-source",
+  transactionScope: TransactionScope = 'none'
 ): SplitMigrationFiles {
   const isSourceToTarget = direction === "source-to-target";
   const sourceMetadataToUse = isSourceToTarget ? sourceMetadata : targetMetadata;
@@ -544,7 +624,10 @@ function generateSplitMigrationSQL(
 
   const header = `-- Migration: ${direction}\n-- Generated: ${new Date().toLocaleString()}\n-- WARNING: Review carefully before executing!\n\n`;
 
-  return {
+  const totalFiles = 7;
+
+  // Generate SQL for each file
+  const files: Record<string, string> = {
     '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(sourceMetadataToUse, targetMetadataToUse),
     '2-sequences': header + generateSequencesSQL(diff, sourceMetadataToUse),
     '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse),
@@ -553,6 +636,27 @@ function generateSplitMigrationSQL(
     '6-triggers': header + generateTriggersSQL(diff, sourceMetadataToUse, targetMetadataToUse),
     '7-policies': header + generatePoliciesSQL(diff, sourceMetadataToUse, targetMetadataToUse),
   };
+
+  // Apply transaction wrapping if enabled
+  if (transactionScope !== 'none') {
+    const labels = [
+      'Extensions, ENUMs, and Functions',
+      'Sequences',
+      'Tables',
+      'Indexes',
+      'Constraints and Foreign Keys',
+      'Triggers',
+      'RLS Policies'
+    ];
+
+    let fileIndex = 0;
+    for (const [key, sql] of Object.entries(files)) {
+      fileIndex++;
+      files[key] = wrapInTransaction(sql, labels[fileIndex - 1], transactionScope, fileIndex, totalFiles);
+    }
+  }
+
+  return files as SplitMigrationFiles;
 }
 
 // Generate migration README with instructions

@@ -10,7 +10,8 @@ import { compareSchemas, applyFilters } from './src/comparison';
 import {
   generateSplitMigrationSQL,
   generateFullDatabaseSQL,
-  generateMigrationReadme
+  generateMigrationReadme,
+  type TransactionScope
 } from './src/generators/sql';
 import { writeMarkdown, printSummary, writeWarningReports } from './src/generators/markdown';
 import { generateCleanupScripts } from './src/generators/cleanup';
@@ -264,11 +265,24 @@ async function main() {
       outputDir
     );
 
+    // Determine transaction scope
+    let transactionScope: TransactionScope = 'none';
+    if (args.useTransactions) {
+      const scopeValue = args.transactionScope || 'per-file';
+      if (scopeValue === 'per-file' || scopeValue === 'single') {
+        transactionScope = scopeValue;
+      } else {
+        console.error(c.error(`Invalid transaction scope: ${scopeValue}. Using 'per-file'.`));
+        transactionScope = 'per-file';
+      }
+      console.log(c.info(`  Transaction mode: ${c.highlight(transactionScope)}`));
+    }
+
     // Generate split SQL migration files
     console.log(`\n${c.subheader(`Generating split SQL migration files...`)}`);
 
-    const splitSourceToTarget = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "source-to-target");
-    const splitTargetToSource = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "target-to-source");
+    const splitSourceToTarget = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "source-to-target", transactionScope);
+    const splitTargetToSource = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "target-to-source", transactionScope);
 
     // Create subdirectories for organized output
     const diffSourceTargetDir = `${outputDir}/diff-source-to-target`;
@@ -332,12 +346,21 @@ async function main() {
   if (args.generateFullMigrations) {
     console.log(`\n${c.subheader(`Generating full database schema dumps...`)}`);
 
+    // Determine transaction scope for full dumps
+    let fullDumpTransactionScope: TransactionScope = 'none';
+    if (args.useTransactions) {
+      const scopeValue = args.transactionScope || 'per-file';
+      if (scopeValue === 'per-file' || scopeValue === 'single') {
+        fullDumpTransactionScope = scopeValue;
+      }
+    }
+
     const fullSourceDir = `${outputDir}/full-source`;
 
     // Generate source database full dump
     console.log(`\n  ${c.info(`Source database full schema:`)}`);
     await Bun.write(`${fullSourceDir}/.gitkeep`, "");
-    const fullSourceDump = generateFullDatabaseSQL(sourceMetadata, "source");
+    const fullSourceDump = generateFullDatabaseSQL(sourceMetadata, "source", fullDumpTransactionScope);
     for (const [key, sql] of Object.entries(fullSourceDump)) {
       const filename = `${fullSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
@@ -349,7 +372,7 @@ async function main() {
       const fullTargetDir = `${outputDir}/full-target`;
       console.log(`\n  ${c.info(`Target database full schema:`)}`);
       await Bun.write(`${fullTargetDir}/.gitkeep`, "");
-      const fullTargetDump = generateFullDatabaseSQL(targetMetadata, "target");
+      const fullTargetDump = generateFullDatabaseSQL(targetMetadata, "target", fullDumpTransactionScope);
       for (const [key, sql] of Object.entries(fullTargetDump)) {
         const filename = `${fullTargetDir}/${key}.sql`;
         await Bun.write(filename, sql);

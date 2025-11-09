@@ -179,6 +179,23 @@ export interface WarningsReport {
   criticalCount: number;
   moderateCount: number;
   minorCount: number;
+  filteredCount?: number; // Number of warnings filtered out by config
+}
+
+// ============================================================
+// WARNING CONFIGURATION TYPES
+// ============================================================
+
+export interface IgnoreRule {
+  type: WarningType;
+  table?: string; // For config.json format
+  pattern?: string; // For .dbdumpignore format
+  reason?: string;
+}
+
+export interface WarningConfig {
+  severity: Partial<Record<WarningType, WarningSeverity>>;
+  ignore: IgnoreRule[];
 }
 
 // ============================================================

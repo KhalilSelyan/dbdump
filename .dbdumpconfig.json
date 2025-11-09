@@ -1,0 +1,15 @@
+{
+  "warnings": {
+    "severity": {
+      "DUPLICATE_INDEX": "moderate",
+      "MISSING_PRIMARY_KEY": "minor"
+    },
+    "ignore": [
+      {
+        "type": "DUPLICATE_INDEX",
+        "table": "public.user_points",
+        "reason": "Multiple indexes intentional for different query patterns"
+      }
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-import type { SchemaDiff, HealthMetrics, SyncDirections, SyncDirection, SchemaMetadata } from './types';
+import type { SchemaDiff, HealthMetrics, SyncDirections, SyncDirection, SchemaMetadata, WarningConfig, IgnoreRule } from './types';
 import { generateWarningsReport } from './warnings';
 
 function calculateSyncDirections(diff: SchemaDiff): SyncDirections {
@@ -1162,7 +1162,9 @@ function generateMigrationSQL(
 function calculateHealthMetrics(
   diff: SchemaDiff,
   sourceMetadata: SchemaMetadata,
-  targetMetadata: SchemaMetadata
+  targetMetadata: SchemaMetadata,
+  warningConfig?: WarningConfig,
+  ignoreRules?: IgnoreRule[]
 ): HealthMetrics {
   const issues: string[] = [];
   let score = 100;
@@ -1217,7 +1219,12 @@ function calculateHealthMetrics(
   }
 
   // Generate warnings for schema issues
-  const warningsReport = generateWarningsReport(sourceMetadata, targetMetadata);
+  const warningsReport = generateWarningsReport(
+    sourceMetadata,
+    targetMetadata,
+    warningConfig,
+    ignoreRules
+  );
 
   // Adjust score based on warnings
   score -= warningsReport.criticalCount * 5;
@@ -1226,10 +1233,14 @@ function calculateHealthMetrics(
 
   // Add warning summary to issues
   if (warningsReport.totalWarnings > 0) {
-    issues.push(
-      `${warningsReport.totalWarnings} schema warning(s) detected ` +
-      `(${warningsReport.criticalCount} critical, ${warningsReport.moderateCount} moderate, ${warningsReport.minorCount} minor)`
-    );
+    let message = `${warningsReport.totalWarnings} schema warning(s) detected ` +
+      `(${warningsReport.criticalCount} critical, ${warningsReport.moderateCount} moderate, ${warningsReport.minorCount} minor)`;
+
+    if (warningsReport.filteredCount) {
+      message += ` [${warningsReport.filteredCount} filtered]`;
+    }
+
+    issues.push(message);
   }
 
   // Ensure score doesn't go below 0

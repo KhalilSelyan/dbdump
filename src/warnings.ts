@@ -1,5 +1,6 @@
-import type { SchemaMetadata, TableInfo, SchemaWarning, WarningsReport } from './types';
+import type { SchemaMetadata, TableInfo, SchemaWarning, WarningsReport, WarningConfig, IgnoreRule, WarningSeverity } from './types';
 import { areColumnArraysEqual } from './utils';
+import { shouldIgnoreWarning } from './config-loader';
 
 /**
  * Detect duplicate indexes (same columns, possibly different names)
@@ -153,16 +154,62 @@ export function analyzeSchema(metadata: SchemaMetadata): SchemaWarning[] {
 }
 
 /**
+ * Apply warning configuration (severity overrides and filtering)
+ */
+export function applyWarningConfig(
+  warnings: SchemaWarning[],
+  config: WarningConfig,
+  ignoreRules: IgnoreRule[]
+): { filtered: SchemaWarning[]; filteredCount: number } {
+  let filteredCount = 0;
+
+  const filtered = warnings
+    .filter(warning => {
+      // Check if warning should be ignored
+      if (shouldIgnoreWarning(warning.type, warning.table, ignoreRules)) {
+        filteredCount++;
+        return false;
+      }
+      return true;
+    })
+    .map(warning => {
+      // Apply severity overrides
+      const customSeverity = config.severity[warning.type];
+      if (customSeverity) {
+        return { ...warning, severity: customSeverity };
+      }
+      return warning;
+    });
+
+  return { filtered, filteredCount };
+}
+
+/**
  * Generate a warnings report for both source and target
  */
 export function generateWarningsReport(
   sourceMetadata: SchemaMetadata,
-  targetMetadata: SchemaMetadata
+  targetMetadata: SchemaMetadata,
+  config: WarningConfig = { severity: {}, ignore: [] },
+  ignoreRules: IgnoreRule[] = []
 ): WarningsReport {
-  const sourceWarnings = analyzeSchema(sourceMetadata);
-  const targetWarnings = analyzeSchema(targetMetadata);
+  const rawSourceWarnings = analyzeSchema(sourceMetadata);
+  const rawTargetWarnings = analyzeSchema(targetMetadata);
+
+  // Apply configuration
+  const { filtered: sourceWarnings, filteredCount: sourceFiltered } = applyWarningConfig(
+    rawSourceWarnings,
+    config,
+    ignoreRules
+  );
+  const { filtered: targetWarnings, filteredCount: targetFiltered } = applyWarningConfig(
+    rawTargetWarnings,
+    config,
+    ignoreRules
+  );
 
   const allWarnings = [...sourceWarnings, ...targetWarnings];
+  const totalFiltered = sourceFiltered + targetFiltered;
 
   return {
     sourceWarnings,
@@ -171,5 +218,6 @@ export function generateWarningsReport(
     criticalCount: allWarnings.filter(w => w.severity === 'critical').length,
     moderateCount: allWarnings.filter(w => w.severity === 'moderate').length,
     minorCount: allWarnings.filter(w => w.severity === 'minor').length,
+    filteredCount: totalFiltered > 0 ? totalFiltered : undefined,
   };
 }

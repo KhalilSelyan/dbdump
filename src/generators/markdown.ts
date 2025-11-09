@@ -1,5 +1,6 @@
 import type { AnalysisResult, HealthMetrics, SyncDirections, SchemaMetadata, TableInfo, SchemaWarning } from '../types';
 import { maskConnectionString } from '../utils';
+import { c, divider } from '../colors';
 
 async function writeMarkdown(
   data: AnalysisResult,
@@ -11,7 +12,7 @@ async function writeMarkdown(
   targetSchema: Map<string, TableInfo>
 ) {
   const outputPath = `${outputDir}/${outputPrefix}.md`;
-  process.stdout.write(`Writing Markdown report...`);
+  process.stdout.write(c.dim(`Writing Markdown report...`));
 
   let md = `# Database Schema Comparison Report\n\n`;
   md += `**Generated:** ${new Date(data.timestamp).toLocaleString()}\n\n`;
@@ -331,68 +332,64 @@ async function writeMarkdown(
   }
 
   await Bun.write(outputPath, md);
-  console.log(` ✓ ${outputPath}`);
+  console.log(` ${c.checkmark()} ${c.path(outputPath)}`);
 }
 
 // Print detailed summary
 function printSummary(result: AnalysisResult) {
-  console.log(`\n${"=".repeat(70)}`);
-  console.log("DATABASE SCHEMA COMPARISON SUMMARY");
-  console.log("=".repeat(70));
+  console.log(`\n${divider()}`);
+  console.log(c.header("DATABASE SCHEMA COMPARISON SUMMARY"));
+  console.log(divider());
 
-  console.log(`\nSource DB: ${maskConnectionString(result.sourceDb)}`);
-  console.log(`Target DB: ${maskConnectionString(result.targetDb)}`);
-  console.log(`Analysis Time: ${new Date(result.timestamp).toLocaleString()}`);
+  console.log(`\n${c.dim(`Source DB: `)}${c.path(maskConnectionString(result.sourceDb))}`);
+  console.log(`${c.dim(`Target DB: `)}${c.path(maskConnectionString(result.targetDb))}`);
+  console.log(`${c.dim(`Analysis Time: `)}${c.highlight(new Date(result.timestamp).toLocaleString())}`);
 
-  console.log(`\n--- Overview ---`);
-  console.log(`Tables only in source: ${result.summary.tablesOnlyInSource}`);
-  console.log(`Tables only in target: ${result.summary.tablesOnlyInTarget}`);
-  console.log(
-    `Tables with differences: ${result.summary.tablesWithDifferences}`
-  );
-  console.log(
-    `Total column differences: ${result.summary.totalColumnDifferences}`
-  );
+  console.log(`\n${c.subheader(`--- Overview ---`)}`);
+  console.log(`${c.dim(`Tables only in source: `)}${c.count(result.summary.tablesOnlyInSource)}`);
+  console.log(`${c.dim(`Tables only in target: `)}${c.count(result.summary.tablesOnlyInTarget)}`);
+  console.log(`${c.dim(`Tables with differences: `)}${c.count(result.summary.tablesWithDifferences)}`);
+  console.log(`${c.dim(`Total column differences: `)}${c.count(result.summary.totalColumnDifferences)}`);
 
   if (result.diff.tablesOnlyInSource.length > 0) {
-    console.log(`\n--- Tables Only in Source ---`);
+    console.log(`\n${c.subheader(`--- Tables Only in Source ---`)}`);
     result.diff.tablesOnlyInSource.forEach((tableRef) => {
-      console.log(`  • ${tableRef.schema}.${tableRef.table}`);
+      console.log(`  ${c.success(`•`)} ${c.highlight(`${tableRef.schema}.${tableRef.table}`)}`);
     });
   }
 
   if (result.diff.tablesOnlyInTarget.length > 0) {
-    console.log(`\n--- Tables Only in Target ---`);
+    console.log(`\n${c.subheader(`--- Tables Only in Target ---`)}`);
     result.diff.tablesOnlyInTarget.forEach((tableRef) => {
-      console.log(`  • ${tableRef.schema}.${tableRef.table}`);
+      console.log(`  ${c.warning(`•`)} ${c.highlight(`${tableRef.schema}.${tableRef.table}`)}`);
     });
   }
 
   if (result.diff.tablesInBoth.length > 0) {
-    console.log(`\n--- Tables with Column Differences ---`);
+    console.log(`\n${c.subheader(`--- Tables with Column Differences ---`)}`);
     for (const table of result.diff.tablesInBoth) {
-      console.log(`\n  ${table.table_schema}.${table.table_name}:`);
+      console.log(`\n  ${c.highlight(`${table.table_schema}.${table.table_name}`)}:`);
 
       if (table.columnsOnlyInSource.length > 0) {
-        console.log(`    Columns only in source:`);
+        console.log(`    ${c.info(`Columns only in source:`)}`);
         table.columnsOnlyInSource.forEach((col) => {
-          console.log(`      - ${col.column_name} (${col.data_type})`);
+          console.log(`      ${c.success(`-`)} ${col.column_name} ${c.dim(`(${col.data_type})`)}`);
         });
       }
 
       if (table.columnsOnlyInTarget.length > 0) {
-        console.log(`    Columns only in target:`);
+        console.log(`    ${c.warning(`Columns only in target:`)}`);
         table.columnsOnlyInTarget.forEach((col) => {
-          console.log(`      - ${col.column_name} (${col.data_type})`);
+          console.log(`      ${c.warning(`-`)} ${col.column_name} ${c.dim(`(${col.data_type})`)}`);
         });
       }
 
       if (table.columnsWithDifferences.length > 0) {
-        console.log(`    Columns with differences:`);
+        console.log(`    ${c.error(`Columns with differences:`)}`);
         table.columnsWithDifferences.forEach((colDiff) => {
-          console.log(`      - ${colDiff.column_name}:`);
+          console.log(`      ${c.error(`-`)} ${colDiff.column_name}:`);
           colDiff.differences.forEach((diff) => {
-            console.log(`          ${diff}`);
+            console.log(`          ${c.dim(diff)}`);
           });
         });
       }
@@ -404,7 +401,7 @@ function printSummary(result: AnalysisResult) {
     result.summary.tablesOnlyInTarget === 0 &&
     result.summary.tablesWithDifferences === 0
   ) {
-    console.log(`\n✓ No differences found! Schemas are identical.`);
+    console.log(`\n${c.success(`✓ No differences found! Schemas are identical.`)}`);
   }
 }
 
@@ -468,7 +465,7 @@ async function writeWarningReports(
   // Source warnings
   if (healthMetrics.warnings.sourceWarnings.length > 0) {
     const sourcePath = `${outputDir}/db-schema-warnings-source.md`;
-    process.stdout.write(`Writing source warnings...`);
+    process.stdout.write(c.dim(`Writing source warnings...`));
 
     let md = `# Database Schema Warnings - Source\n\n`;
     md += `**Database:** \`${maskConnectionString(sourceDb)}\`\n\n`;
@@ -492,13 +489,13 @@ async function writeWarningReports(
     md += formatWarnings(sourceWarnings);
 
     await Bun.write(sourcePath, md);
-    console.log(` ✓ ${sourcePath}`);
+    console.log(` ${c.checkmark()} ${c.path(sourcePath)}`);
   }
 
   // Target warnings
   if (healthMetrics.warnings.targetWarnings.length > 0) {
     const targetPath = `${outputDir}/db-schema-warnings-target.md`;
-    process.stdout.write(`Writing target warnings...`);
+    process.stdout.write(c.dim(`Writing target warnings...`));
 
     let md = `# Database Schema Warnings - Target\n\n`;
     md += `**Database:** \`${maskConnectionString(targetDb)}\`\n\n`;
@@ -522,7 +519,7 @@ async function writeWarningReports(
     md += formatWarnings(targetWarnings);
 
     await Bun.write(targetPath, md);
-    console.log(` ✓ ${targetPath}`);
+    console.log(` ${c.checkmark()} ${c.path(targetPath)}`);
   }
 }
 

@@ -15,8 +15,10 @@ import {
 import { writeMarkdown, printSummary, writeWarningReports } from './src/generators/markdown';
 import { generateCleanupScripts } from './src/generators/cleanup';
 import { calculateHealthMetrics, calculateSyncDirections } from './src/health';
+import { loadCompleteWarningConfig } from './src/config-loader';
 import { parseArguments, printHelp, loadConfig } from './src/config';
 import { maskConnectionString } from './src/utils';
+import { c, divider } from './src/colors';
 import type {
   AnalysisResult,
   FilterOptions,
@@ -90,25 +92,31 @@ async function main() {
     }
   }
 
-  console.log(`\n${"=".repeat(70)}`);
+  console.log(`\n${divider()}`);
   if (dumpOnlyMode) {
-    console.log(`DATABASE SCHEMA DUMP (Source Only)`);
+    console.log(c.header(`DATABASE SCHEMA DUMP (Source Only)`));
   } else {
-    console.log(`DATABASE SCHEMA COMPARISON`);
+    console.log(c.header(`DATABASE SCHEMA COMPARISON`));
   }
-  console.log(`${"=".repeat(70)}\n`);
+  console.log(`${divider()}\n`);
+
+  // Load warning configuration
+  const { config: warningConfig, ignoreRules, summary: configSummary } = await loadCompleteWarningConfig();
+  if (configSummary) {
+    console.log(configSummary);
+  }
 
   // Fetch all available schemas from both databases
-  console.log(`[1/${dumpOnlyMode ? 3 : 5}] Discovering schemas...`);
-  process.stdout.write(`  Fetching schemas from source...`);
+  console.log(c.step(`[1/${dumpOnlyMode ? 3 : 5}] Discovering schemas...`));
+  process.stdout.write(c.dim(`  Fetching schemas from source...`));
   const sourceSchemas = await fetchSchemas(sourceUrl);
-  console.log(` ✓ (${sourceSchemas.length} schemas)`);
+  console.log(` ${c.checkmark()} (${c.count(sourceSchemas.length)} schemas)`);
 
   let targetSchemas: string[] = [];
   if (!dumpOnlyMode) {
-    process.stdout.write(`  Fetching schemas from target...`);
+    process.stdout.write(c.dim(`  Fetching schemas from target...`));
     targetSchemas = await fetchSchemas(targetUrl!);
-    console.log(` ✓ (${targetSchemas.length} schemas)`);
+    console.log(` ${c.checkmark()} (${c.count(targetSchemas.length)} schemas)`);
   }
 
   // Merge schema lists (compare all schemas that exist in either DB)
@@ -119,28 +127,28 @@ async function main() {
     const beforeCount = allSchemas.length;
     allSchemas = allSchemas.filter((schema) => !skipSchemas.includes(schema));
     console.log(
-      `  Skipping ${
+      c.dim(`  Skipping ${
         beforeCount - allSchemas.length
-      } schemas: ${skipSchemas.join(", ")}`
+      } schemas: `) + c.warning(skipSchemas.join(", "))
     );
   }
 
   console.log(
-    `  Comparing across ${allSchemas.length} schemas: ${allSchemas.join(", ")}`
+    c.dim(`  Comparing across `) + c.count(allSchemas.length) + c.dim(` schemas: `) + c.highlight(allSchemas.join(", "))
   );
 
   if (excludeTables.length > 0) {
-    console.log(`  Excluding tables: ${excludeTables.join(", ")}`);
+    console.log(c.dim(`  Excluding tables: `) + c.warning(excludeTables.join(", ")));
   }
 
-  console.log(`\n[2/${dumpOnlyMode ? 3 : 5}] Fetching source database schema...`);
+  console.log(`\n${c.step(`[2/${dumpOnlyMode ? 3 : 5}] Fetching source database schema...`)}`);
   const sourceMetadata = await fetchAllSchemas(
     sourceUrl,
     allSchemas,
     excludeTables,
     "source"
   );
-  console.log(`  Found ${sourceMetadata.tables.size} tables, ${sourceMetadata.enums.length} enums, ${sourceMetadata.functions.length} functions, ${sourceMetadata.extensions.length} extensions`);
+  console.log(c.dim(`  Found `) + c.count(sourceMetadata.tables.size) + c.dim(` tables, `) + c.count(sourceMetadata.enums.length) + c.dim(` enums, `) + c.count(sourceMetadata.functions.length) + c.dim(` functions, `) + c.count(sourceMetadata.extensions.length) + c.dim(` extensions`));
 
   let targetMetadata;
   let diff;
@@ -159,16 +167,16 @@ async function main() {
       tablesInBoth: []
     };
   } else {
-    console.log(`\n[3/5] Fetching target database schema...`);
+    console.log(`\n${c.step(`[3/5] Fetching target database schema...`)}`);
     targetMetadata = await fetchAllSchemas(
       targetUrl!,
       allSchemas,
       excludeTables,
       "target"
     );
-    console.log(`  Found ${targetMetadata.tables.size} tables, ${targetMetadata.enums.length} enums, ${targetMetadata.functions.length} functions, ${targetMetadata.extensions.length} extensions`);
+    console.log(c.dim(`  Found `) + c.count(targetMetadata.tables.size) + c.dim(` tables, `) + c.count(targetMetadata.enums.length) + c.dim(` enums, `) + c.count(targetMetadata.functions.length) + c.dim(` functions, `) + c.count(targetMetadata.extensions.length) + c.dim(` extensions`));
 
-    console.log(`\n[4/5] Comparing schemas...`);
+    console.log(`\n${c.step(`[4/5] Comparing schemas...`)}`);
     diff = compareSchemas(sourceMetadata, targetMetadata);
   }
 
@@ -190,13 +198,13 @@ async function main() {
       filters.onlyColumnDiffs ||
       filters.criticalOnly
     ) {
-      console.log(`  Applying filters...`);
+      console.log(c.info(`  Applying filters...`));
       if (filters.onlyMissingTables)
-        console.log(`    - Only showing missing tables`);
+        console.log(c.dim(`    - Only showing missing tables`));
       if (filters.onlyColumnDiffs)
-        console.log(`    - Only showing column differences`);
+        console.log(c.dim(`    - Only showing column differences`));
       if (filters.criticalOnly)
-        console.log(`    - Only showing critical/breaking changes`);
+        console.log(c.dim(`    - Only showing critical/breaking changes`));
       diff = applyFilters(diff, filters);
     }
 
@@ -224,8 +232,8 @@ async function main() {
     };
 
     // Calculate health metrics and sync directions
-    console.log(`  Calculating health metrics...`);
-    healthMetrics = calculateHealthMetrics(diff, sourceMetadata, targetMetadata);
+    console.log(c.dim(`  Calculating health metrics...`));
+    healthMetrics = calculateHealthMetrics(diff, sourceMetadata, targetMetadata, warningConfig, ignoreRules);
     syncDirections = calculateSyncDirections(diff);
 
     // Save history if requested
@@ -233,11 +241,11 @@ async function main() {
       const timestamp = new Date().toISOString().split("T")[0];
       const historyPath = `${outputDir}/${outputPrefix}-${timestamp}.json`;
       await Bun.write(historyPath, JSON.stringify(result, null, 2));
-      console.log(`  Saved snapshot: ${historyPath}`);
+      console.log(c.success(`  Saved snapshot: `) + c.path(historyPath));
     }
 
     // Write outputs
-    console.log(`\n[5/5] Writing output...`);
+    console.log(`\n${c.step(`[5/5] Writing output...`)}`);
     await writeMarkdown(
       result,
       outputPrefix,
@@ -257,7 +265,7 @@ async function main() {
     );
 
     // Generate split SQL migration files
-    console.log(`\nGenerating split SQL migration files...`);
+    console.log(`\n${c.subheader(`Generating split SQL migration files...`)}`);
 
     const splitSourceToTarget = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "source-to-target");
     const splitTargetToSource = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "target-to-source");
@@ -267,24 +275,24 @@ async function main() {
     const diffTargetSourceDir = `${outputDir}/diff-target-to-source`;
 
     // Write source-to-target files
-    console.log(`\n  Source → Target migrations:`);
+    console.log(`\n  ${c.info(`Source ${c.arrow()} Target migrations:`)}`);
     await Bun.write(`${diffSourceTargetDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(splitSourceToTarget)) {
       const filename = `${diffSourceTargetDir}/${key}.sql`;
       await Bun.write(filename, sql);
-      console.log(`    ✓ ${filename}`);
+      console.log(`    ${c.checkmark()} ${c.path(filename)}`);
     }
 
     // Write target-to-source files
-    console.log(`\n  Target → Source migrations:`);
+    console.log(`\n  ${c.info(`Target ${c.arrow()} Source migrations:`)}`);
     await Bun.write(`${diffTargetSourceDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(splitTargetToSource)) {
       const filename = `${diffTargetSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
-      console.log(`    ✓ ${filename}`);
+      console.log(`    ${c.checkmark()} ${c.path(filename)}`);
     }
   } else {
-    console.log(`\n[3/3] Skipping comparison (dump-only mode)...`);
+    console.log(`\n${c.step(`[3/3] Skipping comparison (dump-only mode)...`)}`);
   }
 
   // Generate README (only in comparison mode)
@@ -292,13 +300,13 @@ async function main() {
     const readme = generateMigrationReadme(outputPrefix);
     const readmePath = `${outputDir}/${outputPrefix}-MIGRATION-README.md`;
     await Bun.write(readmePath, readme);
-    console.log(`\n  Migration guide:`);
-    console.log(`    ✓ ${readmePath}`);
+    console.log(`\n  ${c.info(`Migration guide:`)}`);
+    console.log(`    ${c.checkmark()} ${c.path(readmePath)}`);
   }
 
   // Generate cleanup scripts if requested
   if (args.generateCleanupSQL && !dumpOnlyMode && healthMetrics?.warnings) {
-    console.log(`\nGenerating cleanup scripts...`);
+    console.log(`\n${c.subheader(`Generating cleanup scripts...`)}`);
 
     const dryRun = args.cleanupDryRun !== false; // default to true
     const cleanupScripts = generateCleanupScripts(
@@ -314,42 +322,42 @@ async function main() {
     const cleanupTargetPath = `${outputDir}/cleanup-target.sql`;
 
     await Bun.write(cleanupSourcePath, cleanupScripts.source);
-    console.log(`  ✓ ${cleanupSourcePath}${dryRun ? ' (DRY RUN)' : ''}`);
+    console.log(`  ${c.checkmark()} ${c.path(cleanupSourcePath)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
 
     await Bun.write(cleanupTargetPath, cleanupScripts.target);
-    console.log(`  ✓ ${cleanupTargetPath}${dryRun ? ' (DRY RUN)' : ''}`);
+    console.log(`  ${c.checkmark()} ${c.path(cleanupTargetPath)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
   }
 
   // Generate full database migrations if requested
   if (args.generateFullMigrations) {
-    console.log(`\nGenerating full database schema dumps...`);
+    console.log(`\n${c.subheader(`Generating full database schema dumps...`)}`);
 
     const fullSourceDir = `${outputDir}/full-source`;
 
     // Generate source database full dump
-    console.log(`\n  Source database full schema:`);
+    console.log(`\n  ${c.info(`Source database full schema:`)}`);
     await Bun.write(`${fullSourceDir}/.gitkeep`, "");
     const fullSourceDump = generateFullDatabaseSQL(sourceMetadata, "source");
     for (const [key, sql] of Object.entries(fullSourceDump)) {
       const filename = `${fullSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
-      console.log(`    ✓ ${filename}`);
+      console.log(`    ${c.checkmark()} ${c.path(filename)}`);
     }
 
     // Generate target database full dump (only if not in dump-only mode)
     if (!dumpOnlyMode) {
       const fullTargetDir = `${outputDir}/full-target`;
-      console.log(`\n  Target database full schema:`);
+      console.log(`\n  ${c.info(`Target database full schema:`)}`);
       await Bun.write(`${fullTargetDir}/.gitkeep`, "");
       const fullTargetDump = generateFullDatabaseSQL(targetMetadata, "target");
       for (const [key, sql] of Object.entries(fullTargetDump)) {
         const filename = `${fullTargetDir}/${key}.sql`;
         await Bun.write(filename, sql);
-        console.log(`    ✓ ${filename}`);
+        console.log(`    ${c.checkmark()} ${c.path(filename)}`);
       }
     }
 
-    console.log(`\n  💡 To recreate a database locally, execute the files in order (1-7)`);
+    console.log(`\n  ${c.highlight(`💡 To recreate a database locally, execute the files in order (1-7)`)}`);
   }
 
   // Print summary (only in comparison mode)
@@ -357,23 +365,28 @@ async function main() {
     printSummary(result);
 
     // Print health summary to console
-    console.log(`\n${"=".repeat(70)}`);
-    console.log(`SCHEMA HEALTH`);
-    console.log("=".repeat(70));
-    console.log(`Score: ${healthMetrics!.score}/100 (${healthMetrics!.severity})`);
+    console.log(`\n${divider()}`);
+    console.log(c.header(`SCHEMA HEALTH`));
+    console.log(divider());
+
+    const severityColor = healthMetrics!.severity === 'critical' ? c.critical :
+                          healthMetrics!.severity === 'moderate' ? c.moderate :
+                          healthMetrics!.severity === 'minor' ? c.minor : c.healthy;
+
+    console.log(`Score: ${c.count(healthMetrics!.score)}/100 (${severityColor(healthMetrics!.severity.toUpperCase())})`);
     if (healthMetrics!.issues.length > 0) {
-      console.log(`\nIssues:`);
-      healthMetrics!.issues.forEach((issue) => console.log(`  - ${issue}`));
+      console.log(`\n${c.warning(`Issues:`)}`);
+      healthMetrics!.issues.forEach((issue) => console.log(c.dim(`  - ${issue}`)));
     }
   } else if (dumpOnlyMode) {
-    console.log(`\n${"=".repeat(70)}`);
-    console.log("SCHEMA DUMP COMPLETE");
-    console.log("=".repeat(70));
-    console.log(`Dumped schema from: ${maskConnectionString(sourceUrl)}`);
-    console.log(`Tables: ${sourceMetadata.tables.size}`);
-    console.log(`Enums: ${sourceMetadata.enums.length}`);
-    console.log(`Functions: ${sourceMetadata.functions.length}`);
-    console.log(`Extensions: ${sourceMetadata.extensions.length}`);
+    console.log(`\n${divider()}`);
+    console.log(c.header("SCHEMA DUMP COMPLETE"));
+    console.log(divider());
+    console.log(c.dim(`Dumped schema from: `) + c.path(maskConnectionString(sourceUrl)));
+    console.log(c.dim(`Tables: `) + c.count(sourceMetadata.tables.size));
+    console.log(c.dim(`Enums: `) + c.count(sourceMetadata.enums.length));
+    console.log(c.dim(`Functions: `) + c.count(sourceMetadata.functions.length));
+    console.log(c.dim(`Extensions: `) + c.count(sourceMetadata.extensions.length));
   }
 }
 

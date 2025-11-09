@@ -1,0 +1,11 @@
+# Ignore warnings for specific patterns
+
+# Ignore duplicate indexes on agents table (intentional for performance)
+DUPLICATE_INDEX ca.agents
+
+# Ignore missing primary keys on log/audit tables
+MISSING_PRIMARY_KEY public.*_log
+MISSING_PRIMARY_KEY public.*_audit
+
+# Ignore unindexed foreign keys on chat tables (high write volume)
+UNINDEXED_FOREIGN_KEY public.chat_*

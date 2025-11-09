@@ -68,6 +68,10 @@ function parseArguments() {
         type: "string",
         default: "per-file",
       },
+      sortDependencies: {
+        type: "boolean",
+        default: true,
+      },
       help: {
         type: "boolean",
         short: "h",
@@ -137,11 +141,14 @@ ${colors.bright}${colors.blue}💾 FULL MIGRATION OPTIONS:${colors.reset}
                              ${colors.gray}Creates full-schema.sql files for cloning each database${colors.reset}
                              ${colors.yellow}Required when using dump-only mode (no target specified)${colors.reset}
 
-${colors.bright}${colors.blue}⚡ TRANSACTION OPTIONS:${colors.reset}
+${colors.bright}${colors.blue}⚡ ADVANCED SQL OPTIONS:${colors.reset}
   ${colors.green}--useTransactions${colors.reset}          Wrap migrations in BEGIN...COMMIT blocks ${colors.gray}(default: off)${colors.reset}
   ${colors.green}--transactionScope${colors.reset} <type>  Transaction scope: per-file | single ${colors.gray}(default: per-file)${colors.reset}
                              ${colors.dim}per-file: Each migration file gets its own transaction${colors.reset}
                              ${colors.dim}single: One transaction across all files (requires same session)${colors.reset}
+  ${colors.green}--sortDependencies${colors.reset}         Order tables by foreign key dependencies ${colors.gray}(default: on)${colors.reset}
+                             ${colors.dim}Automatically orders table creation to satisfy FK constraints${colors.reset}
+                             ${colors.dim}Use --sortDependencies=false to disable${colors.reset}
 
 ${colors.bright}${colors.blue}❓ OTHER:${colors.reset}
   ${colors.green}-h, --help${colors.reset}                 Show this help message

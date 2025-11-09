@@ -266,6 +266,7 @@ export interface CLIArgs {
   saveHistory?: boolean;
   useTransactions?: boolean;
   transactionScope?: string;
+  sortDependencies?: boolean;
   help?: boolean;
 }
 

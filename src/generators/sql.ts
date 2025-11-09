@@ -55,6 +55,113 @@ COMMIT;
   }
 }
 
+// ============================================================
+// DEPENDENCY GRAPH AND TOPOLOGICAL SORTING
+// ============================================================
+
+/**
+ * Build a dependency graph from foreign key relationships
+ * Returns a map where each table maps to a set of tables it depends on
+ */
+function buildDependencyGraph(
+  tables: Array<{ schema: string; table: string }>,
+  metadata: SchemaMetadata
+): Map<string, Set<string>> {
+  const graph = new Map<string, Set<string>>();
+  const tableSet = new Set(tables.map(t => `${t.schema}.${t.table}`));
+
+  for (const tableRef of tables) {
+    const tableKey = `${tableRef.schema}.${tableRef.table}`;
+    const tableInfo = metadata.tables.get(tableKey);
+
+    if (!tableInfo) continue;
+
+    // Initialize node
+    if (!graph.has(tableKey)) {
+      graph.set(tableKey, new Set<string>());
+    }
+
+    // Add edges for each foreign key
+    for (const fk of tableInfo.foreignKeys) {
+      const referencedTable = `${fk.foreign_table_schema}.${fk.foreign_table_name}`;
+
+      // Only add dependency if referenced table is in our set of tables to create
+      // This avoids dependencies on external tables that already exist
+      if (tableSet.has(referencedTable) && referencedTable !== tableKey) {
+        graph.get(tableKey)!.add(referencedTable);
+      }
+    }
+  }
+
+  return graph;
+}
+
+/**
+ * Topological sort using Kahn's algorithm
+ * Returns sorted tables and detects circular dependencies
+ */
+function topologicalSort(graph: Map<string, Set<string>>): {
+  sorted: string[];
+  hasCycles: boolean;
+  remaining: Set<string>;
+} {
+  const inDegree = new Map<string, number>();
+  const sorted: string[] = [];
+  const queue: string[] = [];
+
+  // Initialize all nodes
+  for (const node of graph.keys()) {
+    inDegree.set(node, 0);
+  }
+
+  // Calculate in-degrees
+  for (const [node, deps] of graph) {
+    for (const dep of deps) {
+      if (!inDegree.has(dep)) {
+        inDegree.set(dep, 0);
+      }
+      inDegree.set(dep, inDegree.get(dep)! + 1);
+    }
+  }
+
+  // Find nodes with zero in-degree
+  for (const [node, degree] of inDegree) {
+    if (degree === 0) {
+      queue.push(node);
+    }
+  }
+
+  // Process queue
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    sorted.push(node);
+
+    // Reduce in-degree for dependent nodes
+    for (const neighbor of graph.get(node) || []) {
+      const newDegree = inDegree.get(neighbor)! - 1;
+      inDegree.set(neighbor, newDegree);
+      if (newDegree === 0) {
+        queue.push(neighbor);
+      }
+    }
+  }
+
+  // Check for cycles
+  const hasCycles = sorted.length !== graph.size;
+  const remaining = new Set<string>();
+
+  if (hasCycles) {
+    // Find nodes that weren't sorted (part of cycles)
+    for (const node of graph.keys()) {
+      if (!sorted.includes(node)) {
+        remaining.add(node);
+      }
+    }
+  }
+
+  return { sorted, hasCycles, remaining };
+}
+
 function formatColumnDefinition(col: ColumnInfo, includeDefault: boolean = true): string {
   let colDef = `"${col.column_name}" `;
 
@@ -203,7 +310,8 @@ function generateSequencesSQL(
 // Helper: Generate Tables SQL (columns only, no constraints/indexes/triggers)
 function generateTablesSQL(
   diff: SchemaDiff,
-  sourceMetadata: SchemaMetadata
+  sourceMetadata: SchemaMetadata,
+  sortByDependencies: boolean = true
 ): string {
   let sql = `-- ============================================================\n`;
   sql += `-- TABLES\n`;
@@ -213,7 +321,49 @@ function generateTablesSQL(
   const schemaMap = sourceMetadata.tables;
   let hasTables = false;
 
-  for (const tableRef of diff.tablesOnlyInSource) {
+  // Determine table creation order
+  let tablesToCreate = diff.tablesOnlyInSource;
+
+  if (sortByDependencies && tablesToCreate.length > 0) {
+    // Build dependency graph
+    const graph = buildDependencyGraph(tablesToCreate, sourceMetadata);
+
+    // Topologically sort
+    const { sorted, hasCycles, remaining } = topologicalSort(graph);
+
+    if (hasCycles) {
+      sql += `-- ⚠️  WARNING: Circular dependencies detected!\n`;
+      sql += `-- The following tables have circular foreign key relationships:\n`;
+      for (const tableKey of remaining) {
+        sql += `--   - ${tableKey}\n`;
+      }
+      sql += `-- These will be created at the end. You may need DEFERRABLE constraints.\n\n`;
+    }
+
+    // Convert sorted keys back to table references
+    const sortedTables: Array<{ schema: string; table: string }> = [];
+    const remainingTables: Array<{ schema: string; table: string }> = [];
+
+    for (const tableKey of sorted) {
+      const [schema, table] = tableKey.split('.');
+      sortedTables.push({ schema, table });
+    }
+
+    for (const tableKey of remaining) {
+      const [schema, table] = tableKey.split('.');
+      remainingTables.push({ schema, table });
+    }
+
+    tablesToCreate = [...sortedTables, ...remainingTables];
+
+    if (sorted.length > 0) {
+      sql += `-- ℹ️  Tables ordered by foreign key dependencies\n`;
+      sql += `-- Tables with no dependencies are created first\n\n`;
+    }
+  }
+
+  // Create tables in order
+  for (const tableRef of tablesToCreate) {
     const tableKey = `${tableRef.schema}.${tableRef.table}`;
     const tableInfo = schemaMap.get(tableKey);
     if (!tableInfo) continue;
@@ -540,7 +690,8 @@ function generatePoliciesSQL(
 function generateFullDatabaseSQL(
   metadata: SchemaMetadata,
   dbLabel: string,
-  transactionScope: TransactionScope = 'none'
+  transactionScope: TransactionScope = 'none',
+  sortByDependencies: boolean = true
 ): SplitMigrationFiles {
   const header = `-- Full Schema Dump: ${dbLabel}\n-- Generated: ${new Date().toLocaleString()}\n-- This file contains the complete schema for recreating the database\n\n`;
 
@@ -571,7 +722,7 @@ function generateFullDatabaseSQL(
   const files: Record<string, string> = {
     '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(metadata, emptyMetadata),
     '2-sequences': header + generateSequencesSQL(fullDiff, metadata),
-    '3-tables': header + generateTablesSQL(fullDiff, metadata),
+    '3-tables': header + generateTablesSQL(fullDiff, metadata, sortByDependencies),
     '4-indexes': header + generateIndexesSQL(fullDiff, metadata),
     '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(fullDiff, metadata),
     '6-triggers': header + generateTriggersSQL(fullDiff, metadata, emptyMetadata),
@@ -616,7 +767,8 @@ function generateSplitMigrationSQL(
   sourceMetadata: SchemaMetadata,
   targetMetadata: SchemaMetadata,
   direction: "source-to-target" | "target-to-source",
-  transactionScope: TransactionScope = 'none'
+  transactionScope: TransactionScope = 'none',
+  sortByDependencies: boolean = true
 ): SplitMigrationFiles {
   const isSourceToTarget = direction === "source-to-target";
   const sourceMetadataToUse = isSourceToTarget ? sourceMetadata : targetMetadata;
@@ -630,7 +782,7 @@ function generateSplitMigrationSQL(
   const files: Record<string, string> = {
     '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(sourceMetadataToUse, targetMetadataToUse),
     '2-sequences': header + generateSequencesSQL(diff, sourceMetadataToUse),
-    '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse),
+    '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse, sortByDependencies),
     '4-indexes': header + generateIndexesSQL(diff, sourceMetadataToUse),
     '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(diff, sourceMetadataToUse, isSourceToTarget),
     '6-triggers': header + generateTriggersSQL(diff, sourceMetadataToUse, targetMetadataToUse),

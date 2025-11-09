@@ -278,11 +278,17 @@ async function main() {
       console.log(c.info(`  Transaction mode: ${c.highlight(transactionScope)}`));
     }
 
+    // Determine dependency sorting
+    const sortDependencies = args.sortDependencies !== false; // Default true
+    if (sortDependencies) {
+      console.log(c.info(`  Dependency sorting: ${c.highlight('enabled')}`));
+    }
+
     // Generate split SQL migration files
     console.log(`\n${c.subheader(`Generating split SQL migration files...`)}`);
 
-    const splitSourceToTarget = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "source-to-target", transactionScope);
-    const splitTargetToSource = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "target-to-source", transactionScope);
+    const splitSourceToTarget = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "source-to-target", transactionScope, sortDependencies);
+    const splitTargetToSource = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "target-to-source", transactionScope, sortDependencies);
 
     // Create subdirectories for organized output
     const diffSourceTargetDir = `${outputDir}/diff-source-to-target`;
@@ -355,12 +361,15 @@ async function main() {
       }
     }
 
+    // Use same dependency sorting setting
+    const fullDumpSortDependencies = args.sortDependencies !== false;
+
     const fullSourceDir = `${outputDir}/full-source`;
 
     // Generate source database full dump
     console.log(`\n  ${c.info(`Source database full schema:`)}`);
     await Bun.write(`${fullSourceDir}/.gitkeep`, "");
-    const fullSourceDump = generateFullDatabaseSQL(sourceMetadata, "source", fullDumpTransactionScope);
+    const fullSourceDump = generateFullDatabaseSQL(sourceMetadata, "source", fullDumpTransactionScope, fullDumpSortDependencies);
     for (const [key, sql] of Object.entries(fullSourceDump)) {
       const filename = `${fullSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
@@ -372,7 +381,7 @@ async function main() {
       const fullTargetDir = `${outputDir}/full-target`;
       console.log(`\n  ${c.info(`Target database full schema:`)}`);
       await Bun.write(`${fullTargetDir}/.gitkeep`, "");
-      const fullTargetDump = generateFullDatabaseSQL(targetMetadata, "target", fullDumpTransactionScope);
+      const fullTargetDump = generateFullDatabaseSQL(targetMetadata, "target", fullDumpTransactionScope, fullDumpSortDependencies);
       for (const [key, sql] of Object.entries(fullTargetDump)) {
         const filename = `${fullTargetDir}/${key}.sql`;
         await Bun.write(filename, sql);

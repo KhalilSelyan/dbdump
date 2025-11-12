@@ -17,6 +17,12 @@ A powerful PostgreSQL schema comparison tool built with Bun. Compare schemas bet
 - 🔄 **Circular Dependency Handling** - Handles circular FK relationships with DEFERRABLE constraints
 - ↩️ **Rollback Scripts** - Generate reverse migrations with dry-run safety mode
 - ⚙️ **Warning Configuration** - Customize warning severity and ignore patterns
+- 📋 **Migration Numbering** - Create numbered migration folders (migrations-0, migrations-1, etc.)
+- 🧹 **Empty File Skipping** - Skip creation of empty SQL files for cleaner git diffs
+- 🔌 **Programmatic API** - TypeScript API for integration with other tools
+- 📄 **JSON Output** - Machine-readable output for tooling integration
+- 👁️ **Dry-Run Mode** - Preview migrations without writing files
+- 📈 **Enhanced Console Output** - Migration summaries with change statistics
 
 ## 🚀 Quick Start
 
@@ -281,21 +287,23 @@ Understand what needs to sync in both directions:
 
 ```
 .
-├── compareordumpdbs.ts          # Main entry point
+├── compareordumpdbs.ts          # CLI entry point
 ├── src/
+│   ├── api.ts                   # Programmatic API (NEW!)
 │   ├── types.ts                 # TypeScript interfaces
 │   ├── utils.ts                 # Helper functions
 │   ├── config.ts                # CLI argument parsing
 │   ├── config-loader.ts         # Warning config loader
 │   ├── colors.ts                # Terminal color utilities
-│   ├── database.ts              # PostgreSQL queries
+│   ├── database.ts              # PostgreSQL queries with retry logic
 │   ├── comparison.ts            # Schema comparison logic
 │   ├── health.ts                # Health metrics calculation
 │   └── generators/
 │       ├── sql.ts               # SQL migration generation
 │       ├── markdown.ts          # Report generation
 │       └── warnings.ts          # Warning detection
-├── db-config.example.json       # Example configuration
+├── package.json                 # Exports API and CLI
+├── db-config.example.json       # Example configuration with new options
 ├── .dbdumpconfig.json           # Warning configuration (optional)
 └── .dbdumpignore                # Simple warning ignore patterns (optional)
 ```
@@ -313,6 +321,10 @@ Understand what needs to sync in both directions:
 ```
 -o, --output <prefix>      Output filename prefix (default: db-schema-diff)
 -d, --outputDir <dir>      Output directory for generated files
+--migrationNumber <num>    Use migrations-N directory structure (e.g., migrations-3)
+--skipEmptyFiles           Skip creation of empty SQL files (cleaner git diffs)
+--format <type>            Output format: sql | json | markdown (default: sql)
+--dryRun                   Preview changes without writing files (shows what would be generated)
 ```
 
 ### Filter Options
@@ -425,14 +437,188 @@ bun run compareordumpdbs.ts -c db-config.json \
   --handleCircularDeps=false
 ```
 
+## 🚀 Advanced Features
+
+### Migration Numbering
+
+Create numbered migration folders for version control integration:
+
+```bash
+# Create baseline migration (migrations-0)
+bun run compareordumpdbs.ts \
+  -s postgresql://localhost/prod_db \
+  --generateFullMigrations \
+  --migrationNumber 0 \
+  --outputDir ./drizzle
+
+# Creates: ./drizzle/migrations-0/ with all schema files
+```
+
+```bash
+# Create incremental migration (migrations-3)
+bun run compareordumpdbs.ts \
+  -s postgresql://localhost/current_db \
+  -t postgresql://localhost/temp_migration \
+  --migrationNumber 3 \
+  --skipEmptyFiles \
+  --outputDir ./drizzle
+
+# Creates: ./drizzle/migrations-3/ with only changed files
+```
+
+### JSON Output Mode
+
+Generate machine-readable output for tooling integration:
+
+```bash
+bun run compareordumpdbs.ts \
+  -s postgresql://localhost/source \
+  -t postgresql://localhost/target \
+  --format json > migration-result.json
+```
+
+**Output format:**
+```json
+{
+  "differences": {
+    "tables": {
+      "added": ["public.profiles"],
+      "removed": [],
+      "modified": [{
+        "table": "public.users",
+        "changes": [
+          { "type": "column_added", "column": "bio", "dataType": "text" }
+        ]
+      }]
+    },
+    "functions": { "added": ["calculate_stats"], "removed": [], "modified": [] }
+  },
+  "summary": {
+    "totalChanges": 2,
+    "breaking": false,
+    "fileCount": 0
+  }
+}
+```
+
+### Dry-Run Mode
+
+Preview what would be generated without writing files:
+
+```bash
+bun run compareordumpdbs.ts \
+  -s postgresql://localhost/source \
+  -t postgresql://localhost/target \
+  --migrationNumber 5 \
+  --dryRun
+
+# Shows:
+#   [DRY RUN] ./migrations-5/diff-source-to-target/3-tables.sql (127 lines)
+#   [DRY RUN] ./migrations-5/diff-source-to-target/6-triggers.sql (45 lines)
+```
+
+### Programmatic API
+
+Use dbdump as a TypeScript library:
+
+```typescript
+import { generateMigration, generateFullDump } from 'dbdump';
+
+// Generate incremental migration
+const result = await generateMigration({
+  sourceUrl: 'postgresql://localhost/current',
+  targetUrl: 'postgresql://localhost/temp',
+  outputDir: './drizzle',
+  migrationNumber: 5,
+  skipEmptyFiles: true,
+  useTransactions: true,
+  sortDependencies: true,
+});
+
+console.log(`Created migration-${result.version}`);
+console.log(`Files created: ${result.filesCreated.length}`);
+console.log(`Total changes: ${result.totalChanges}`);
+console.log(`Tables: ${result.changeTypes.tables}`);
+console.log(`Columns: ${result.changeTypes.columns}`);
+
+// Generate full database dump
+const files = await generateFullDump({
+  dbUrl: 'postgresql://localhost/prod',
+  outputDir: './dumps',
+  migrationNumber: 0,
+  skipEmptyFiles: true,
+});
+
+console.log(`Created ${files.length} files`);
+```
+
+### Enhanced Config File
+
+Use config file for cleaner commands:
+
+**db-config.json:**
+```json
+{
+  "source": "postgresql://localhost/source_db",
+  "target": "postgresql://localhost/target_db",
+  "outputDir": "./migrations",
+  "excludeTables": ["migrations", "schema_migrations"],
+  "skipSchemas": ["extensions", "graphql"],
+  "incrementalMode": true,
+  "skipEmptyFiles": true,
+  "format": "sql",
+  "transactionScope": "per-file"
+}
+```
+
+Then simply run:
+```bash
+bun run compareordumpdbs.ts -c db-config.json --migrationNumber 3
+```
+
+**Config Options:**
+- `incrementalMode` - When true, automatically enables `skipEmptyFiles`
+- `skipEmptyFiles` - Skip creation of empty SQL files
+- `format` - Output format (sql, json, markdown)
+- `transactionScope` - Transaction scope (per-file, single, none)
+- `migrationNumbering` - "manual" (requires --migrationNumber flag) or "auto" (future feature)
+
+### Migration Summary
+
+When generating migrations, see a detailed summary:
+
+```
+Migration Summary:
+  Tables: 3 changes
+  Columns: 12 changes
+  Indexes: 5 changes
+  Constraints: 8 changes
+  Functions: 2 changes
+  Total files created: 6
+```
+
+### Circular Dependency Warnings
+
+Automatically detects and warns about circular foreign key relationships:
+
+```
+⚠️  Circular dependencies detected!
+Tables with circular FK relationships will use DEFERRABLE constraints.
+Check the generated SQL for details.
+```
+
 ## 🔒 Safety Features
 
 1. **Dry-Run by Default**: Rollback scripts are generated with all DROP statements commented out
-2. **Transaction Support**: Optional transaction wrappers for atomicity
-3. **Row Count Checks**: Rollback scripts include suggestions to check row counts before dropping
-4. **Comprehensive Warnings**: Clear warnings about data loss risks in rollback scripts
-5. **Dependency Sorting**: Prevents FK constraint errors by ordering table creation
-6. **Circular Dep Handling**: Uses DEFERRABLE constraints to handle circular relationships safely
+2. **Preview Mode**: Use `--dryRun` to see what would be generated without writing files
+3. **Transaction Support**: Optional transaction wrappers for atomicity
+4. **Row Count Checks**: Rollback scripts include suggestions to check row counts before dropping
+5. **Comprehensive Warnings**: Clear warnings about data loss risks in rollback scripts
+6. **Dependency Sorting**: Prevents FK constraint errors by ordering table creation
+7. **Circular Dep Handling**: Uses DEFERRABLE constraints to handle circular relationships safely
+8. **Retry Logic**: Automatic retry with exponential backoff for transient connection failures
+9. **Enhanced Error Messages**: Clear, actionable error messages for common database issues
+10. **Migration Summary**: Shows detailed change statistics before committing
 
 ## 🤝 Contributing
 

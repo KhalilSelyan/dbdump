@@ -76,6 +76,12 @@ function parseArguments() {
         type: "boolean",
         default: true,
       },
+      migrationNumber: {
+        type: "string",
+      },
+      skipEmptyFiles: {
+        type: "boolean",
+      },
       help: {
         type: "boolean",
         short: "h",
@@ -85,7 +91,17 @@ function parseArguments() {
     allowPositionals: true,
   });
 
-  return values;
+  // Convert migrationNumber to number if provided
+  const result = values as CLIArgs;
+  if (result.migrationNumber !== undefined) {
+    const num = parseInt(result.migrationNumber as any, 10);
+    if (isNaN(num)) {
+      throw new Error(`Invalid migration number: ${result.migrationNumber}`);
+    }
+    result.migrationNumber = num;
+  }
+
+  return result;
 }
 
 // ANSI color codes
@@ -128,6 +144,8 @@ ${colors.bright}${colors.blue}📡 CONNECTION OPTIONS:${colors.reset}
 ${colors.bright}${colors.blue}📁 OUTPUT OPTIONS:${colors.reset}
   ${colors.green}-o, --output${colors.reset} <prefix>      Output filename prefix ${colors.gray}(default: db-schema-diff)${colors.reset}
   ${colors.green}-d, --outputDir${colors.reset} <dir>      Output directory for generated files
+  ${colors.green}--migrationNumber${colors.reset} <num>    Use migrations-N directory structure ${colors.gray}(e.g., migrations-3)${colors.reset}
+  ${colors.green}--skipEmptyFiles${colors.reset}           Skip creation of empty SQL files ${colors.gray}(cleaner git diffs)${colors.reset}
 
 ${colors.bright}${colors.blue}🔍 FILTER OPTIONS:${colors.reset}
   ${colors.green}-e, --excludeTables${colors.reset} <...>  Exclude specific tables from comparison

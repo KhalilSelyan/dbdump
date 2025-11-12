@@ -293,6 +293,8 @@ export interface CLIArgs {
   transactionScope?: string;
   sortDependencies?: boolean;
   handleCircularDeps?: boolean;
+  migrationNumber?: number;
+  skipEmptyFiles?: boolean;
   help?: boolean;
 }
 

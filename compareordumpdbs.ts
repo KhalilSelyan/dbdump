@@ -27,6 +27,25 @@ import type {
   SyncDirections
 } from './src/types';
 
+// Helper function to check if SQL content is meaningful
+function isEmptySQL(sql: string): boolean {
+  const trimmed = sql.trim();
+  if (trimmed.length === 0) return true;
+
+  // Check if it's just a comment saying no changes
+  const noChangePatterns = [
+    /^-- No .* to create\s*$/,
+    /^-- No changes.*$/,
+    /^-- Nothing to migrate.*$/,
+  ];
+
+  for (const pattern of noChangePatterns) {
+    if (pattern.test(trimmed)) return true;
+  }
+
+  return false;
+}
+
 // Main function
 async function main() {
   const args = parseArguments();
@@ -81,6 +100,11 @@ async function main() {
   }
 
   const outputPrefix = args.output || "db-schema-diff";
+
+  // If migrationNumber is provided, wrap output in migrations-N directory
+  if (args.migrationNumber !== undefined) {
+    outputDir = `${outputDir}/migrations-${args.migrationNumber}`;
+  }
 
   // Create output directory if it doesn't exist
   if (outputDir !== ".") {
@@ -304,6 +328,11 @@ async function main() {
     console.log(`\n  ${c.info(`Source ${c.arrow()} Target migrations:`)}`);
     await Bun.write(`${diffSourceTargetDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(splitSourceToTarget)) {
+      // Skip empty files if flag is set
+      if (args.skipEmptyFiles && isEmptySQL(sql)) {
+        console.log(`    ${c.dim(`⊘ ${diffSourceTargetDir}/${key}.sql (empty, skipped)`)}`);
+        continue;
+      }
       const filename = `${diffSourceTargetDir}/${key}.sql`;
       await Bun.write(filename, sql);
       console.log(`    ${c.checkmark()} ${c.path(filename)}`);
@@ -313,6 +342,11 @@ async function main() {
     console.log(`\n  ${c.info(`Target ${c.arrow()} Source migrations:`)}`);
     await Bun.write(`${diffTargetSourceDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(splitTargetToSource)) {
+      // Skip empty files if flag is set
+      if (args.skipEmptyFiles && isEmptySQL(sql)) {
+        console.log(`    ${c.dim(`⊘ ${diffTargetSourceDir}/${key}.sql (empty, skipped)`)}`);
+        continue;
+      }
       const filename = `${diffTargetSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
       console.log(`    ${c.checkmark()} ${c.path(filename)}`);
@@ -368,6 +402,11 @@ async function main() {
     console.log(`\n  ${c.info(`Rollback Source ${c.arrow()} Target:`)}`);
     await Bun.write(`${rollbackSourceToTargetDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(rollbackSourceToTarget)) {
+      // Skip empty files if flag is set
+      if (args.skipEmptyFiles && isEmptySQL(sql)) {
+        console.log(`    ${c.dim(`⊘ ${rollbackSourceToTargetDir}/${key}.sql (empty, skipped)`)}`);
+        continue;
+      }
       const filename = `${rollbackSourceToTargetDir}/${key}.sql`;
       await Bun.write(filename, sql);
       console.log(`    ${c.checkmark()} ${c.path(filename)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
@@ -377,6 +416,11 @@ async function main() {
     console.log(`\n  ${c.info(`Rollback Target ${c.arrow()} Source:`)}`);
     await Bun.write(`${rollbackTargetToSourceDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(rollbackTargetToSource)) {
+      // Skip empty files if flag is set
+      if (args.skipEmptyFiles && isEmptySQL(sql)) {
+        console.log(`    ${c.dim(`⊘ ${rollbackTargetToSourceDir}/${key}.sql (empty, skipped)`)}`);
+        continue;
+      }
       const filename = `${rollbackTargetToSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
       console.log(`    ${c.checkmark()} ${c.path(filename)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
@@ -409,6 +453,11 @@ async function main() {
     await Bun.write(`${fullSourceDir}/.gitkeep`, "");
     const fullSourceDump = generateFullDatabaseSQL(sourceMetadata, "source", fullDumpTransactionScope, fullDumpSortDependencies, fullDumpHandleCircularDeps);
     for (const [key, sql] of Object.entries(fullSourceDump)) {
+      // Skip empty files if flag is set
+      if (args.skipEmptyFiles && isEmptySQL(sql)) {
+        console.log(`    ${c.dim(`⊘ ${fullSourceDir}/${key}.sql (empty, skipped)`)}`);
+        continue;
+      }
       const filename = `${fullSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
       console.log(`    ${c.checkmark()} ${c.path(filename)}`);
@@ -421,6 +470,11 @@ async function main() {
       await Bun.write(`${fullTargetDir}/.gitkeep`, "");
       const fullTargetDump = generateFullDatabaseSQL(targetMetadata, "target", fullDumpTransactionScope, fullDumpSortDependencies, fullDumpHandleCircularDeps);
       for (const [key, sql] of Object.entries(fullTargetDump)) {
+        // Skip empty files if flag is set
+        if (args.skipEmptyFiles && isEmptySQL(sql)) {
+          console.log(`    ${c.dim(`⊘ ${fullTargetDir}/${key}.sql (empty, skipped)`)}`);
+          continue;
+        }
         const filename = `${fullTargetDir}/${key}.sql`;
         await Bun.write(filename, sql);
         console.log(`    ${c.checkmark()} ${c.path(filename)}`);

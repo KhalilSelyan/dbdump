@@ -2,26 +2,88 @@ import { Client } from 'pg';
 import type { SchemaMetadata, TableInfo, EnumInfo, ExtensionInfo, FunctionInfo } from './types';
 import { parsePostgresArray } from './utils';
 
-async function fetchSchemas(connectionUrl: string): Promise<string[]> {
-  const client = new Client({ connectionString: connectionUrl });
+// Helper function for exponential backoff retry logic
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  try {
-    await client.connect();
+// Retry wrapper for database operations
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  operationName: string,
+  maxRetries = 3
+): Promise<T> {
+  let lastError: any;
 
-    const query = `
-      SELECT schema_name
-      FROM information_schema.schemata
-      WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'pg_temp_1', 'pg_toast_temp_1')
-        AND schema_name NOT LIKE 'pg_temp_%'
-        AND schema_name NOT LIKE 'pg_toast_temp_%'
-      ORDER BY schema_name;
-    `;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error: any) {
+      lastError = error;
 
-    const result = await client.query(query);
-    return result.rows.map((row) => row.schema_name);
-  } finally {
-    await client.end();
+      // Don't retry on authentication errors or syntax errors
+      const noRetryErrors = ['28P01', '42601', '42501', '3D000'];
+      if (noRetryErrors.includes(error.code)) {
+        throw enhanceError(error);
+      }
+
+      if (attempt < maxRetries) {
+        const backoffMs = 1000 * attempt; // 1s, 2s, 3s
+        console.error(`\n  ⚠️  ${operationName} failed (attempt ${attempt}/${maxRetries}), retrying in ${backoffMs}ms...`);
+        console.error(`  Error: ${error.message}`);
+        await sleep(backoffMs);
+      }
+    }
   }
+
+  throw enhanceError(lastError);
+}
+
+// Enhance error messages for better debugging
+function enhanceError(error: any): Error {
+  if (!error.code) return error;
+
+  const errorMessages: Record<string, string> = {
+    'ECONNREFUSED': 'Database connection refused. Is PostgreSQL running? Check host and port.',
+    'ENOTFOUND': 'Database host not found. Check the hostname in your connection string.',
+    'ETIMEDOUT': 'Database connection timed out. Check network connectivity and firewall settings.',
+    '28P01': 'Authentication failed. Check username and password.',
+    '3D000': 'Database does not exist. Check the database name in your connection string.',
+    '42501': 'Permission denied. Check user privileges for accessing schema information.',
+    '08006': 'Connection failure. Database might be shutting down or network issue occurred.',
+    '57P03': 'Database is starting up. Please wait and try again.',
+  };
+
+  const enhancedMessage = errorMessages[error.code];
+  if (enhancedMessage) {
+    error.message = `${enhancedMessage}\n  Original error: ${error.message}`;
+  }
+
+  return error;
+}
+
+async function fetchSchemas(connectionUrl: string): Promise<string[]> {
+  return withRetry(async () => {
+    const client = new Client({ connectionString: connectionUrl });
+
+    try {
+      await client.connect();
+
+      const query = `
+        SELECT schema_name
+        FROM information_schema.schemata
+        WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'pg_temp_1', 'pg_toast_temp_1')
+          AND schema_name NOT LIKE 'pg_temp_%'
+          AND schema_name NOT LIKE 'pg_toast_temp_%'
+        ORDER BY schema_name;
+      `;
+
+      const result = await client.query(query);
+      return result.rows.map((row) => row.schema_name);
+    } finally {
+      await client.end();
+    }
+  }, 'Fetch schemas');
 }
 
 // Fetch schema information from database (all schemas)
@@ -35,7 +97,9 @@ async function fetchAllSchemas(
 
   try {
     process.stdout.write(`  Connecting to ${dbLabel}...`);
-    await client.connect();
+    await withRetry(async () => {
+      await client.connect();
+    }, `Connect to ${dbLabel}`);
     console.log(" ✓");
 
     // Query to get all tables and their columns across all schemas

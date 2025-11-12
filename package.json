@@ -10,7 +10,9 @@
   },
   "scripts": {
     "compare": "bun run compareordumpdbs.ts",
-    "help": "bun run compareordumpdbs.ts --help"
+    "help": "bun run compareordumpdbs.ts --help",
+    "build": "bun build --compile --outfile dbdump ./compareordumpdbs.ts",
+    "install-global": "bun run build && sudo cp dbdump /usr/local/bin/dbdump && echo 'Installed dbdump to /usr/local/bin/dbdump'"
   },
   "keywords": [
     "postgresql",
@@ -36,7 +38,9 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "pg": "^8.16.3"
+    "@clack/prompts": "^0.11.0",
+    "pg": "^8.16.3",
+    "picocolors": "^1.1.1"
   },
   "engines": {
     "bun": ">=1.0.0"

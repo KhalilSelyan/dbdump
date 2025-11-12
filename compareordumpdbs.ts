@@ -5,6 +5,8 @@
  * Refactored modular version
  */
 
+import * as p from '@clack/prompts';
+import pc from 'picocolors';
 import { fetchSchemas, fetchAllSchemas } from './src/database';
 import { compareSchemas, applyFilters } from './src/comparison';
 import {
@@ -20,6 +22,7 @@ import { loadCompleteWarningConfig } from './src/config-loader';
 import { parseArguments, printHelp, loadConfig } from './src/config';
 import { maskConnectionString } from './src/utils';
 import { c, divider } from './src/colors';
+import { runInteractiveMode } from './src/interactive';
 import type {
   AnalysisResult,
   FilterOptions,
@@ -165,11 +168,19 @@ function formatDifferencesAsJSON(diff: any, sourceMetadata: any, targetMetadata:
 
 // Main function
 async function main() {
-  const args = parseArguments();
+  let args = parseArguments();
 
   if (args.help) {
     printHelp();
     process.exit(0);
+  }
+
+  // Check if we should use interactive mode (no args provided except possibly help)
+  const hasNoArgs = !args.source && !args.config;
+
+  if (hasNoArgs) {
+    // Run interactive mode
+    args = await runInteractiveMode();
   }
 
   let sourceUrl: string;
@@ -238,38 +249,37 @@ async function main() {
   if (outputDir !== ".") {
     try {
       await Bun.write(`${outputDir}/.gitkeep`, "");
-      console.log(`\nOutput directory: ${outputDir}/`);
+      p.log.info(`Output directory: ${pc.cyan(outputDir + '/')}`);
     } catch (error) {
-      console.error(`Error creating output directory: ${error}`);
+      p.log.error(`Error creating output directory: ${error}`);
       process.exit(1);
     }
   }
 
-  console.log(`\n${divider()}`);
-  if (dumpOnlyMode) {
-    console.log(c.header(`DATABASE SCHEMA DUMP (Source Only)`));
-  } else {
-    console.log(c.header(`DATABASE SCHEMA COMPARISON`));
+  // Show mode
+  if (!hasNoArgs) {
+    // Only show intro for CLI mode (interactive mode already showed it)
+    p.intro(pc.bgCyan(pc.black(dumpOnlyMode ? ' 🗄️  Database Schema Dump ' : ' 🗄️  Database Schema Comparison ')));
   }
-  console.log(`${divider()}\n`);
 
   // Load warning configuration
   const { config: warningConfig, ignoreRules, summary: configSummary } = await loadCompleteWarningConfig();
   if (configSummary) {
-    console.log(configSummary);
+    p.log.info(configSummary);
   }
 
   // Fetch all available schemas from both databases
-  console.log(c.step(`[1/${dumpOnlyMode ? 3 : 5}] Discovering schemas...`));
-  process.stdout.write(c.dim(`  Fetching schemas from source...`));
+  const s1 = p.spinner();
+  s1.start('Discovering schemas from source database');
   const sourceSchemas = await fetchSchemas(sourceUrl);
-  console.log(` ${c.checkmark()} (${c.count(sourceSchemas.length)} schemas)`);
+  s1.stop(`Found ${pc.yellow(String(sourceSchemas.length))} schemas in source`);
 
   let targetSchemas: string[] = [];
   if (!dumpOnlyMode) {
-    process.stdout.write(c.dim(`  Fetching schemas from target...`));
+    const s2 = p.spinner();
+    s2.start('Discovering schemas from target database');
     targetSchemas = await fetchSchemas(targetUrl!);
-    console.log(` ${c.checkmark()} (${c.count(targetSchemas.length)} schemas)`);
+    s2.stop(`Found ${pc.yellow(String(targetSchemas.length))} schemas in target`);
   }
 
   // Merge schema lists (compare all schemas that exist in either DB)
@@ -279,29 +289,24 @@ async function main() {
   if (skipSchemas.length > 0) {
     const beforeCount = allSchemas.length;
     allSchemas = allSchemas.filter((schema) => !skipSchemas.includes(schema));
-    console.log(
-      c.dim(`  Skipping ${
-        beforeCount - allSchemas.length
-      } schemas: `) + c.warning(skipSchemas.join(", "))
-    );
+    p.log.warn(`Skipping ${beforeCount - allSchemas.length} schemas: ${skipSchemas.join(", ")}`);
   }
 
-  console.log(
-    c.dim(`  Comparing across `) + c.count(allSchemas.length) + c.dim(` schemas: `) + c.highlight(allSchemas.join(", "))
-  );
+  p.log.info(`Comparing ${pc.yellow(String(allSchemas.length))} schemas: ${pc.cyan(allSchemas.join(", "))}`);
 
   if (excludeTables.length > 0) {
-    console.log(c.dim(`  Excluding tables: `) + c.warning(excludeTables.join(", ")));
+    p.log.info(`Excluding tables: ${pc.yellow(excludeTables.join(", "))}`);
   }
 
-  console.log(`\n${c.step(`[2/${dumpOnlyMode ? 3 : 5}] Fetching source database schema...`)}`);
+  const s3 = p.spinner();
+  s3.start('Fetching source database schema');
   const sourceMetadata = await fetchAllSchemas(
     sourceUrl,
     allSchemas,
     excludeTables,
     "source"
   );
-  console.log(c.dim(`  Found `) + c.count(sourceMetadata.tables.size) + c.dim(` tables, `) + c.count(sourceMetadata.enums.length) + c.dim(` enums, `) + c.count(sourceMetadata.functions.length) + c.dim(` functions, `) + c.count(sourceMetadata.extensions.length) + c.dim(` extensions`));
+  s3.stop(`Source: ${pc.yellow(String(sourceMetadata.tables.size))} tables, ${pc.yellow(String(sourceMetadata.enums.length))} enums, ${pc.yellow(String(sourceMetadata.functions.length))} functions`);
 
   let targetMetadata;
   let diff;
@@ -320,17 +325,20 @@ async function main() {
       tablesInBoth: []
     };
   } else {
-    console.log(`\n${c.step(`[3/5] Fetching target database schema...`)}`);
+    const s4 = p.spinner();
+    s4.start('Fetching target database schema');
     targetMetadata = await fetchAllSchemas(
       targetUrl!,
       allSchemas,
       excludeTables,
       "target"
     );
-    console.log(c.dim(`  Found `) + c.count(targetMetadata.tables.size) + c.dim(` tables, `) + c.count(targetMetadata.enums.length) + c.dim(` enums, `) + c.count(targetMetadata.functions.length) + c.dim(` functions, `) + c.count(targetMetadata.extensions.length) + c.dim(` extensions`));
+    s4.stop(`Target: ${pc.yellow(String(targetMetadata.tables.size))} tables, ${pc.yellow(String(targetMetadata.enums.length))} enums, ${pc.yellow(String(targetMetadata.functions.length))} functions`);
 
-    console.log(`\n${c.step(`[4/5] Comparing schemas...`)}`);
+    const s5 = p.spinner();
+    s5.start('Comparing schemas');
     diff = compareSchemas(sourceMetadata, targetMetadata);
+    s5.stop('Schema comparison complete');
 
     // Early exit for JSON format output
     if (args.format === 'json') {
@@ -431,42 +439,45 @@ async function main() {
       if (scopeValue === 'per-file' || scopeValue === 'single') {
         transactionScope = scopeValue;
       } else {
-        console.error(c.error(`Invalid transaction scope: ${scopeValue}. Using 'per-file'.`));
+        p.log.error(`Invalid transaction scope: ${scopeValue}. Using 'per-file'.`);
         transactionScope = 'per-file';
       }
-      console.log(c.info(`  Transaction mode: ${c.highlight(transactionScope)}`));
+      p.log.info(`Transaction mode: ${pc.cyan(transactionScope)}`);
     }
 
     // Determine dependency sorting
     const sortDependencies = args.sortDependencies !== false; // Default true
     if (sortDependencies) {
-      console.log(c.info(`  Dependency sorting: ${c.highlight('enabled')}`));
+      p.log.info(`Dependency sorting: ${pc.cyan('enabled')}`);
     }
 
     // Determine circular dependency handling
     const handleCircularDeps = args.handleCircularDeps !== false; // Default true
     if (handleCircularDeps && sortDependencies) {
-      console.log(c.info(`  Circular dependency handling: ${c.highlight('enabled')}`));
+      p.log.info(`Circular dependency handling: ${pc.cyan('enabled')}`);
     }
 
     // Generate split SQL migration files
-    const modeLabel = args.dryRun ? 'Previewing split SQL migration files (DRY RUN)' : 'Generating split SQL migration files';
-    console.log(`\n${c.subheader(`${modeLabel}...`)}`);
-
-    if (args.dryRun) {
-      console.log(c.warning(`  ⚠️  DRY-RUN MODE: No files will be written`));
-    }
+    const s6 = p.spinner();
+    const modeLabel = args.dryRun ? 'Previewing migrations (dry-run)' : 'Generating migration SQL files';
+    s6.start(modeLabel);
 
     const splitSourceToTarget = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "source-to-target", transactionScope, sortDependencies, handleCircularDeps);
     const splitTargetToSource = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "target-to-source", transactionScope, sortDependencies, handleCircularDeps);
+    s6.stop('Migration files generated');
+
+    if (args.dryRun) {
+      p.log.warn('DRY-RUN MODE: No files will be written');
+    }
 
     // Check for circular dependencies and warn
     if (handleCircularDeps && sortDependencies) {
       const tablesSQL = splitSourceToTarget['3-tables'];
       if (tablesSQL.includes('CIRCULAR DEPENDENCY HANDLING')) {
-        console.log(c.warning(`\n  ⚠️  Circular dependencies detected!`));
-        console.log(c.dim(`  Tables with circular FK relationships will use DEFERRABLE constraints.`));
-        console.log(c.dim(`  Check the generated SQL for details.`));
+        p.note(
+          'Tables with circular FK relationships will use DEFERRABLE constraints.\nCheck the generated SQL for details.',
+          '⚠️  Circular Dependencies Detected'
+        );
       }
     }
 
@@ -478,62 +489,64 @@ async function main() {
     const filesCreated: string[] = [];
 
     // Write source-to-target files
-    console.log(`\n  ${c.info(`Source ${c.arrow()} Target migrations:`)}`);
+    p.log.step(`Source → Target migrations`);
     if (!args.dryRun) {
       await Bun.write(`${diffSourceTargetDir}/.gitkeep`, "");
     }
     for (const [key, sql] of Object.entries(splitSourceToTarget)) {
       // Skip empty files if flag is set
       if (args.skipEmptyFiles && isEmptySQL(sql)) {
-        console.log(`    ${c.dim(`⊘ ${diffSourceTargetDir}/${key}.sql (empty, skipped)`)}`);
+        p.log.info(pc.dim(`⊘ ${diffSourceTargetDir}/${key}.sql (empty, skipped)`));
         continue;
       }
       const filename = `${diffSourceTargetDir}/${key}.sql`;
       if (args.dryRun) {
         const lineCount = sql.split('\n').length;
-        console.log(`    ${c.dim(`[DRY RUN]`)} ${c.path(filename)} ${c.dim(`(${lineCount} lines)`)}`);
+        p.log.info(`${pc.dim('[DRY RUN]')} ${pc.cyan(filename)} ${pc.dim(`(${lineCount} lines)`)}`);
       } else {
         await Bun.write(filename, sql);
         filesCreated.push(filename);
-        console.log(`    ${c.checkmark()} ${c.path(filename)}`);
+        p.log.success(`${pc.cyan(filename)}`);
       }
     }
 
     // Write target-to-source files
-    console.log(`\n  ${c.info(`Target ${c.arrow()} Source migrations:`)}`);
+    p.log.step(`Target → Source migrations`);
     if (!args.dryRun) {
       await Bun.write(`${diffTargetSourceDir}/.gitkeep`, "");
     }
     for (const [key, sql] of Object.entries(splitTargetToSource)) {
       // Skip empty files if flag is set
       if (args.skipEmptyFiles && isEmptySQL(sql)) {
-        console.log(`    ${c.dim(`⊘ ${diffTargetSourceDir}/${key}.sql (empty, skipped)`)}`);
+        p.log.info(pc.dim(`⊘ ${diffTargetSourceDir}/${key}.sql (empty, skipped)`));
         continue;
       }
       const filename = `${diffTargetSourceDir}/${key}.sql`;
       if (args.dryRun) {
         const lineCount = sql.split('\n').length;
-        console.log(`    ${c.dim(`[DRY RUN]`)} ${c.path(filename)} ${c.dim(`(${lineCount} lines)`)}`);
+        p.log.info(`${pc.dim('[DRY RUN]')} ${pc.cyan(filename)} ${pc.dim(`(${lineCount} lines)`)}`);
       } else {
         await Bun.write(filename, sql);
         filesCreated.push(filename);
-        console.log(`    ${c.checkmark()} ${c.path(filename)}`);
+        p.log.success(`${pc.cyan(filename)}`);
       }
     }
 
     // Show migration summary
     if (!args.dryRun) {
       const summary = generateMigrationSummary(diff, sourceMetadata, targetMetadata, filesCreated);
-      console.log(`\n${c.subheader('Migration Summary:')}`);
-      if (summary.tables > 0) console.log(`  ${c.info('Tables:')} ${c.count(summary.tables)} changes`);
-      if (summary.columns > 0) console.log(`  ${c.info('Columns:')} ${c.count(summary.columns)} changes`);
-      if (summary.indexes > 0) console.log(`  ${c.info('Indexes:')} ${c.count(summary.indexes)} changes`);
-      if (summary.constraints > 0) console.log(`  ${c.info('Constraints:')} ${c.count(summary.constraints)} changes`);
-      if (summary.functions > 0) console.log(`  ${c.info('Functions:')} ${c.count(summary.functions)} changes`);
-      console.log(`  ${c.highlight('Total files created:')} ${c.count(summary.filesCreated)}`);
+      const summaryLines: string[] = [];
+      if (summary.tables > 0) summaryLines.push(`Tables: ${pc.yellow(String(summary.tables))} changes`);
+      if (summary.columns > 0) summaryLines.push(`Columns: ${pc.yellow(String(summary.columns))} changes`);
+      if (summary.indexes > 0) summaryLines.push(`Indexes: ${pc.yellow(String(summary.indexes))} changes`);
+      if (summary.constraints > 0) summaryLines.push(`Constraints: ${pc.yellow(String(summary.constraints))} changes`);
+      if (summary.functions > 0) summaryLines.push(`Functions: ${pc.yellow(String(summary.functions))} changes`);
+      summaryLines.push(`Total files created: ${pc.cyan(String(summary.filesCreated))}`);
+
+      p.note(summaryLines.join('\n'), 'Migration Summary');
     }
   } else {
-    console.log(`\n${c.step(`[3/3] Skipping comparison (dump-only mode)...`)}`);
+    p.log.info('Dump-only mode: Skipping schema comparison');
   }
 
   // Generate README (only in comparison mode)
@@ -541,20 +554,20 @@ async function main() {
     const readme = generateMigrationReadme(outputPrefix);
     const readmePath = `${outputDir}/${outputPrefix}-MIGRATION-README.md`;
     await Bun.write(readmePath, readme);
-    console.log(`\n  ${c.info(`Migration guide:`)}`);
-    console.log(`    ${c.checkmark()} ${c.path(readmePath)}`);
+    p.log.success(`Migration guide: ${pc.cyan(readmePath)}`);
   }
 
   // Generate rollback/cleanup scripts if requested
   if (args.generateCleanupSQL && !dumpOnlyMode) {
-    console.log(`\n${c.subheader(`Generating rollback/cleanup scripts...`)}`);
+    const s7 = p.spinner();
+    s7.start('Generating rollback/cleanup scripts');
 
     const dryRun = args.cleanupDryRun !== false; // default to true
     if (dryRun) {
-      console.log(c.warning(`  ⚠️  DRY-RUN MODE: DROP statements will be commented out`));
-      console.log(c.info(`  To enable actual execution, use: --cleanupDryRun=false`));
+      p.log.warn('DRY-RUN MODE: DROP statements will be commented out');
+      p.log.info('To enable actual execution, use: --cleanupDryRun=false');
     } else {
-      console.log(c.error(`  ⚠️  DRY-RUN DISABLED: DROP statements will execute!`));
+      p.log.error('⚠️  DRY-RUN DISABLED: DROP statements will execute!');
     }
 
     // Generate rollback for source→target migration
@@ -575,44 +588,47 @@ async function main() {
       dryRun
     );
 
+    s7.stop('Rollback scripts generated');
+
     // Create subdirectories for rollback scripts
     const rollbackSourceToTargetDir = `${outputDir}/rollback-source-to-target`;
     const rollbackTargetToSourceDir = `${outputDir}/rollback-target-to-source`;
 
     // Write source→target rollback files
-    console.log(`\n  ${c.info(`Rollback Source ${c.arrow()} Target:`)}`);
+    p.log.step(`Rollback Source → Target`);
     await Bun.write(`${rollbackSourceToTargetDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(rollbackSourceToTarget)) {
       // Skip empty files if flag is set
       if (args.skipEmptyFiles && isEmptySQL(sql)) {
-        console.log(`    ${c.dim(`⊘ ${rollbackSourceToTargetDir}/${key}.sql (empty, skipped)`)}`);
+        p.log.info(pc.dim(`⊘ ${rollbackSourceToTargetDir}/${key}.sql (empty, skipped)`));
         continue;
       }
       const filename = `${rollbackSourceToTargetDir}/${key}.sql`;
       await Bun.write(filename, sql);
-      console.log(`    ${c.checkmark()} ${c.path(filename)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
+      p.log.success(`${pc.cyan(filename)}${dryRun ? pc.yellow(' (DRY RUN)') : ''}`);
     }
 
     // Write target→source rollback files
-    console.log(`\n  ${c.info(`Rollback Target ${c.arrow()} Source:`)}`);
+    p.log.step(`Rollback Target → Source`);
     await Bun.write(`${rollbackTargetToSourceDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(rollbackTargetToSource)) {
       // Skip empty files if flag is set
       if (args.skipEmptyFiles && isEmptySQL(sql)) {
-        console.log(`    ${c.dim(`⊘ ${rollbackTargetToSourceDir}/${key}.sql (empty, skipped)`)}`);
+        p.log.info(pc.dim(`⊘ ${rollbackTargetToSourceDir}/${key}.sql (empty, skipped)`));
         continue;
       }
       const filename = `${rollbackTargetToSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
-      console.log(`    ${c.checkmark()} ${c.path(filename)}${dryRun ? c.warning(' (DRY RUN)') : ''}`);
+      p.log.success(`${pc.cyan(filename)}${dryRun ? pc.yellow(' (DRY RUN)') : ''}`);
     }
 
-    console.log(c.info(`\n  💡 Execute rollback files in reverse order (7→6→5→4→3→2→1)`));
+    p.log.info('💡 Execute rollback files in reverse order (7→6→5→4→3→2→1)');
   }
 
   // Generate full database migrations if requested
   if (args.generateFullMigrations) {
-    console.log(`\n${c.subheader(`Generating full database schema dumps...`)}`);
+    const s8 = p.spinner();
+    s8.start('Generating full database schema dumps');
 
     // Determine transaction scope for full dumps
     let fullDumpTransactionScope: TransactionScope = 'none';
@@ -630,39 +646,42 @@ async function main() {
     const fullSourceDir = `${outputDir}/full-source`;
 
     // Generate source database full dump
-    console.log(`\n  ${c.info(`Source database full schema:`)}`);
-    await Bun.write(`${fullSourceDir}/.gitkeep`, "");
     const fullSourceDump = generateFullDatabaseSQL(sourceMetadata, "source", fullDumpTransactionScope, fullDumpSortDependencies, fullDumpHandleCircularDeps);
+
+    s8.stop('Full schema dumps generated');
+
+    p.log.step(`Source database full schema`);
+    await Bun.write(`${fullSourceDir}/.gitkeep`, "");
     for (const [key, sql] of Object.entries(fullSourceDump)) {
       // Skip empty files if flag is set
       if (args.skipEmptyFiles && isEmptySQL(sql)) {
-        console.log(`    ${c.dim(`⊘ ${fullSourceDir}/${key}.sql (empty, skipped)`)}`);
+        p.log.info(pc.dim(`⊘ ${fullSourceDir}/${key}.sql (empty, skipped)`));
         continue;
       }
       const filename = `${fullSourceDir}/${key}.sql`;
       await Bun.write(filename, sql);
-      console.log(`    ${c.checkmark()} ${c.path(filename)}`);
+      p.log.success(pc.cyan(filename));
     }
 
     // Generate target database full dump (only if not in dump-only mode)
     if (!dumpOnlyMode) {
       const fullTargetDir = `${outputDir}/full-target`;
-      console.log(`\n  ${c.info(`Target database full schema:`)}`);
+      p.log.step(`Target database full schema`);
       await Bun.write(`${fullTargetDir}/.gitkeep`, "");
       const fullTargetDump = generateFullDatabaseSQL(targetMetadata, "target", fullDumpTransactionScope, fullDumpSortDependencies, fullDumpHandleCircularDeps);
       for (const [key, sql] of Object.entries(fullTargetDump)) {
         // Skip empty files if flag is set
         if (args.skipEmptyFiles && isEmptySQL(sql)) {
-          console.log(`    ${c.dim(`⊘ ${fullTargetDir}/${key}.sql (empty, skipped)`)}`);
+          p.log.info(pc.dim(`⊘ ${fullTargetDir}/${key}.sql (empty, skipped)`));
           continue;
         }
         const filename = `${fullTargetDir}/${key}.sql`;
         await Bun.write(filename, sql);
-        console.log(`    ${c.checkmark()} ${c.path(filename)}`);
+        p.log.success(pc.cyan(filename));
       }
     }
 
-    console.log(`\n  ${c.highlight(`💡 To recreate a database locally, execute the files in order (1-7)`)}`);
+    p.log.info('💡 To recreate a database locally, execute the files in order (1-7)');
   }
 
   // Print summary (only in comparison mode)
@@ -670,78 +689,80 @@ async function main() {
     printSummary(result);
 
     // Print health summary to console
-    console.log(`\n${divider()}`);
-    console.log(c.header(`SCHEMA SYNC HEALTH`));
-    console.log(divider());
-
     const sync = healthMetrics!.sync;
     const syncSeverity = sync.overall.score >= 90 ? 'healthy' :
                          sync.overall.score >= 70 ? 'minor' :
                          sync.overall.score >= 40 ? 'moderate' : 'critical';
-    const syncColor = syncSeverity === 'critical' ? c.critical :
-                      syncSeverity === 'moderate' ? c.moderate :
-                      syncSeverity === 'minor' ? c.minor : c.healthy;
+    const icon = sync.overall.score >= 90 ? '✓' : '⚠️';
 
-    console.log(`Overall Sync: ${c.count(sync.overall.score)}/100 ${syncColor(sync.overall.score >= 90 ? '✓' : '⚠️')}`);
+    const healthLines: string[] = [];
+    healthLines.push(`Overall Sync: ${pc.yellow(String(sync.overall.score))}/100 ${icon}`);
+    healthLines.push('');
+    healthLines.push(pc.bold('Category Breakdown:'));
 
-    console.log(`\n${c.subheader('Category Breakdown:')}`);
     const formatScore = (cat: any) => {
-      const icon = cat.score === 100 ? c.healthy('✓') : c.warning('⚠️');
-      const scoreStr = cat.score === 100 ? c.healthy(`${cat.score}/100`) : c.count(`${cat.score}/100`);
-      return `  ${cat.label.padEnd(12)} ${scoreStr} ${icon}`;
+      const catIcon = cat.score === 100 ? pc.green('✓') : pc.yellow('⚠️');
+      const scoreStr = cat.score === 100 ? pc.green(`${cat.score}/100`) : pc.yellow(`${cat.score}/100`);
+      return `${cat.label.padEnd(12)} ${scoreStr} ${catIcon}`;
     };
 
-    console.log(formatScore(sync.categories.tables));
-    console.log(formatScore(sync.categories.columns));
-    console.log(formatScore(sync.categories.indexes));
-    console.log(formatScore(sync.categories.constraints));
-    console.log(formatScore(sync.categories.other));
+    healthLines.push(formatScore(sync.categories.tables));
+    healthLines.push(formatScore(sync.categories.columns));
+    healthLines.push(formatScore(sync.categories.indexes));
+    healthLines.push(formatScore(sync.categories.constraints));
+    healthLines.push(formatScore(sync.categories.other));
 
     if (sync.overall.issues.length > 0) {
-      console.log(`\n${c.warning('Sync Issues:')}`);
-      sync.overall.issues.forEach((issue: string) => console.log(c.dim(`  - ${issue}`)));
+      healthLines.push('');
+      healthLines.push(pc.yellow('Sync Issues:'));
+      sync.overall.issues.forEach((issue: string) => healthLines.push(pc.dim(`- ${issue}`)));
     }
 
-    console.log(`\n${divider()}`);
-    console.log(c.header(`SCHEMA QUALITY`));
-    console.log(divider());
+    p.note(healthLines.join('\n'), 'Schema Sync Health');
 
     const formatQuality = (label: string, quality: any) => {
-      const gradeColor = quality.grade === 'A' ? c.healthy :
-                         quality.grade === 'B' ? c.healthy :
-                         quality.grade === 'C' ? c.warning :
-                         quality.grade === 'D' ? c.moderate :
-                         c.critical;
+      const gradeColor = quality.grade === 'A' ? pc.green :
+                         quality.grade === 'B' ? pc.green :
+                         quality.grade === 'C' ? pc.yellow :
+                         quality.grade === 'D' ? pc.yellow :
+                         pc.red;
       const severityLabel = quality.severity === 'healthy' ? 'Excellent' :
                            quality.severity === 'minor' ? 'Good' :
                            quality.severity === 'moderate' ? 'Needs Attention' :
                            'Critical';
 
-      console.log(`${c.subheader(label)}: ${c.count(quality.score)}/100 (Grade: ${gradeColor(quality.grade)}) - ${severityLabel}`);
+      const qualityLines: string[] = [];
+      qualityLines.push(`${pc.yellow(String(quality.score))}/100 (Grade: ${gradeColor(quality.grade)}) - ${severityLabel}`);
+
       if (quality.warnings.totalWarnings > 0) {
-        let warningMsg = `  ${quality.warnings.totalWarnings} warning(s): ` +
+        let warningMsg = `${quality.warnings.totalWarnings} warning(s): ` +
           `${quality.warnings.criticalCount} critical, ` +
           `${quality.warnings.moderateCount} moderate, ` +
           `${quality.warnings.minorCount} minor`;
         if (quality.warnings.filteredCount) {
-          warningMsg += c.dim(` [${quality.warnings.filteredCount} filtered]`);
+          warningMsg += pc.dim(` [${quality.warnings.filteredCount} filtered]`);
         }
-        console.log(c.dim(warningMsg));
+        qualityLines.push(pc.dim(warningMsg));
       }
+
+      p.note(qualityLines.join('\n'), label);
     };
 
-    formatQuality('Source Database', healthMetrics!.sourceQuality);
-    formatQuality('\nTarget Database', healthMetrics!.targetQuality);
+    formatQuality('Source Database Quality', healthMetrics!.sourceQuality);
+    formatQuality('Target Database Quality', healthMetrics!.targetQuality);
   } else if (dumpOnlyMode) {
-    console.log(`\n${divider()}`);
-    console.log(c.header("SCHEMA DUMP COMPLETE"));
-    console.log(divider());
-    console.log(c.dim(`Dumped schema from: `) + c.path(maskConnectionString(sourceUrl)));
-    console.log(c.dim(`Tables: `) + c.count(sourceMetadata.tables.size));
-    console.log(c.dim(`Enums: `) + c.count(sourceMetadata.enums.length));
-    console.log(c.dim(`Functions: `) + c.count(sourceMetadata.functions.length));
-    console.log(c.dim(`Extensions: `) + c.count(sourceMetadata.extensions.length));
+    const dumpLines: string[] = [];
+    dumpLines.push(`Dumped schema from: ${pc.cyan(maskConnectionString(sourceUrl))}`);
+    dumpLines.push(`Tables: ${pc.yellow(String(sourceMetadata.tables.size))}`);
+    dumpLines.push(`Enums: ${pc.yellow(String(sourceMetadata.enums.length))}`);
+    dumpLines.push(`Functions: ${pc.yellow(String(sourceMetadata.functions.length))}`);
+    dumpLines.push(`Extensions: ${pc.yellow(String(sourceMetadata.extensions.length))}`);
+
+    p.note(dumpLines.join('\n'), 'Schema Dump Complete');
   }
+
+  // Outro message
+  p.outro(pc.green('✓ All done!'));
 }
 
 // Run main

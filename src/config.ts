@@ -118,150 +118,129 @@ function parseArguments() {
   return result;
 }
 
-// ANSI color codes
-const colors = {
-  reset: '\x1b[0m',
-  bright: '\x1b[1m',
-  dim: '\x1b[2m',
-
-  cyan: '\x1b[36m',
-  blue: '\x1b[34m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  magenta: '\x1b[35m',
-  red: '\x1b[31m',
-  white: '\x1b[37m',
-  gray: '\x1b[90m',
-
-  bgBlue: '\x1b[44m',
-  bgCyan: '\x1b[46m',
-};
+import pc from 'picocolors';
+import * as p from '@clack/prompts';
 
 function printHelp() {
-  console.log(`
-${colors.cyan}╔════════════════════════════════════════════════════════════════════════╗
-║                                                                        ║
-║   ${colors.bright}🗄️  DATABASE SCHEMA COMPARISON TOOL${colors.reset}${colors.cyan}                            ║
-║                                                                        ║
-║   ${colors.gray}Compare tables and columns between two databases${colors.reset}${colors.cyan}               ║
-║                                                                        ║
-╚════════════════════════════════════════════════════════════════════════╝${colors.reset}
+  p.intro(pc.bgCyan(pc.black(' 🗄️  Database Schema Comparison Tool ')));
 
-${colors.bright}${colors.white}USAGE:${colors.reset}
-  ${colors.dim}bun run compare-db-schemas.ts [options]${colors.reset}
+  console.log(`\n${pc.bold(pc.white('USAGE:'))}
+  ${pc.dim('bun run compare-db-schemas.ts [options]')}
 
-${colors.bright}${colors.blue}📡 CONNECTION OPTIONS:${colors.reset}
-  ${colors.green}-s, --source${colors.reset} <url>         Source database URL ${colors.yellow}(required)${colors.reset}
-  ${colors.green}-t, --target${colors.reset} <url>         Target database URL ${colors.gray}(optional - omit for dump-only mode)${colors.reset}
-  ${colors.green}-c, --config${colors.reset} <file>        Load config from JSON file
+${pc.bold(pc.blue('📡 CONNECTION OPTIONS:'))}
+  ${pc.green('-s, --source')} <url>         Source database URL ${pc.yellow('(required)')}
+  ${pc.green('-t, --target')} <url>         Target database URL ${pc.gray('(optional - omit for dump-only mode)')}
+  ${pc.green('-c, --config')} <file>        Load config from JSON file
 
-${colors.bright}${colors.blue}📁 OUTPUT OPTIONS:${colors.reset}
-  ${colors.green}-o, --output${colors.reset} <prefix>      Output filename prefix ${colors.gray}(default: db-schema-diff)${colors.reset}
-  ${colors.green}-d, --outputDir${colors.reset} <dir>      Output directory for generated files
-  ${colors.green}--migrationNumber${colors.reset} <num>    Use migrations-N directory structure ${colors.gray}(e.g., migrations-3)${colors.reset}
-  ${colors.green}--skipEmptyFiles${colors.reset}           Skip creation of empty SQL files ${colors.gray}(cleaner git diffs)${colors.reset}
-  ${colors.green}--format${colors.reset} <type>            Output format: sql | json | markdown ${colors.gray}(default: sql)${colors.reset}
-  ${colors.green}--dryRun${colors.reset}                   Preview changes without writing files ${colors.gray}(shows what would be generated)${colors.reset}
+${pc.bold(pc.blue('📁 OUTPUT OPTIONS:'))}
+  ${pc.green('-o, --output')} <prefix>      Output filename prefix ${pc.gray('(default: db-schema-diff)')}
+  ${pc.green('-d, --outputDir')} <dir>      Output directory for generated files
+  ${pc.green('--migrationNumber')} <num>    Use migrations-N directory structure ${pc.gray('(e.g., migrations-3)')}
+  ${pc.green('--skipEmptyFiles')}           Skip creation of empty SQL files ${pc.gray('(cleaner git diffs)')}
+  ${pc.green('--format')} <type>            Output format: sql | json | markdown ${pc.gray('(default: sql)')}
+  ${pc.green('--dryRun')}                   Preview changes without writing files ${pc.gray('(shows what would be generated)')}
 
-${colors.bright}${colors.blue}🔍 FILTER OPTIONS:${colors.reset}
-  ${colors.green}-e, --excludeTables${colors.reset} <...>  Exclude specific tables from comparison
-  ${colors.green}-x, --skipSchemas${colors.reset} <...>    Skip entire schemas ${colors.gray}(e.g., extensions, graphql)${colors.reset}
-  ${colors.green}--onlyMissingTables${colors.reset}        Show only tables that exist in one DB but not the other
-  ${colors.green}--onlyColumnDiffs${colors.reset}          Show only column-level differences
-  ${colors.green}--criticalOnly${colors.reset}             Show only breaking changes ${colors.red}(type changes, nullability)${colors.reset}
+${pc.bold(pc.blue('🔍 FILTER OPTIONS:'))}
+  ${pc.green('-e, --excludeTables')} <...>  Exclude specific tables from comparison
+  ${pc.green('-x, --skipSchemas')} <...>    Skip entire schemas ${pc.gray('(e.g., extensions, graphql)')}
+  ${pc.green('--onlyMissingTables')}        Show only tables that exist in one DB but not the other
+  ${pc.green('--onlyColumnDiffs')}          Show only column-level differences
+  ${pc.green('--criticalOnly')}             Show only breaking changes ${pc.red('(type changes, nullability)')}
 
-${colors.bright}${colors.blue}📜 HISTORY OPTIONS:${colors.reset}
-  ${colors.green}--saveHistory${colors.reset}              Save this comparison as a timestamped snapshot
-  ${colors.green}--compareWith${colors.reset} <file>       Compare current state against a historical snapshot
+${pc.bold(pc.blue('📜 HISTORY OPTIONS:'))}
+  ${pc.green('--saveHistory')}              Save this comparison as a timestamped snapshot
+  ${pc.green('--compareWith')} <file>       Compare current state against a historical snapshot
 
-${colors.bright}${colors.blue}💾 FULL MIGRATION OPTIONS:${colors.reset}
-  ${colors.green}--generateFullMigrations${colors.reset}   Generate complete SQL dumps for database(s)
-                             ${colors.gray}Creates full-schema.sql files for cloning each database${colors.reset}
-                             ${colors.yellow}Required when using dump-only mode (no target specified)${colors.reset}
+${pc.bold(pc.blue('💾 FULL MIGRATION OPTIONS:'))}
+  ${pc.green('--generateFullMigrations')}   Generate complete SQL dumps for database(s)
+                             ${pc.gray('Creates full-schema.sql files for cloning each database')}
+                             ${pc.yellow('Required when using dump-only mode (no target specified)')}
 
-${colors.bright}${colors.blue}⚡ ADVANCED SQL OPTIONS:${colors.reset}
-  ${colors.green}--useTransactions${colors.reset}          Wrap migrations in BEGIN...COMMIT blocks ${colors.gray}(default: off)${colors.reset}
-  ${colors.green}--transactionScope${colors.reset} <type>  Transaction scope: per-file | single ${colors.gray}(default: per-file)${colors.reset}
-                             ${colors.dim}per-file: Each migration file gets its own transaction${colors.reset}
-                             ${colors.dim}single: One transaction across all files (requires same session)${colors.reset}
-  ${colors.green}--sortDependencies${colors.reset}         Order tables by foreign key dependencies ${colors.gray}(default: on)${colors.reset}
-                             ${colors.dim}Automatically orders table creation to satisfy FK constraints${colors.reset}
-                             ${colors.dim}Use --sortDependencies=false to disable${colors.reset}
-  ${colors.green}--handleCircularDeps${colors.reset}       Handle circular FK dependencies with DEFERRABLE ${colors.gray}(default: on)${colors.reset}
-                             ${colors.dim}Creates tables in 2 phases: structure first, then deferred FKs${colors.reset}
-                             ${colors.dim}Use --handleCircularDeps=false to disable${colors.reset}
+${pc.bold(pc.blue('⚡ ADVANCED SQL OPTIONS:'))}
+  ${pc.green('--useTransactions')}          Wrap migrations in BEGIN...COMMIT blocks ${pc.gray('(default: off)')}
+  ${pc.green('--transactionScope')} <type>  Transaction scope: per-file | single ${pc.gray('(default: per-file)')}
+                             ${pc.dim('per-file: Each migration file gets its own transaction')}
+                             ${pc.dim('single: One transaction across all files (requires same session)')}
+  ${pc.green('--sortDependencies')}         Order tables by foreign key dependencies ${pc.gray('(default: on)')}
+                             ${pc.dim('Automatically orders table creation to satisfy FK constraints')}
+                             ${pc.dim('Use --sortDependencies=false to disable')}
+  ${pc.green('--handleCircularDeps')}       Handle circular FK dependencies with DEFERRABLE ${pc.gray('(default: on)')}
+                             ${pc.dim('Creates tables in 2 phases: structure first, then deferred FKs')}
+                             ${pc.dim('Use --handleCircularDeps=false to disable')}
 
-${colors.bright}${colors.blue}🔄 ROLLBACK/CLEANUP OPTIONS:${colors.reset}
-  ${colors.green}--generateCleanupSQL${colors.reset}       Generate rollback scripts to undo migrations ${colors.gray}(default: off)${colors.reset}
-                             ${colors.dim}Creates rollback-* directories with reverse migration scripts${colors.reset}
-                             ${colors.red}⚠️  These scripts DROP tables/columns - use with caution!${colors.reset}
-  ${colors.green}--cleanupDryRun${colors.reset}            Dry-run mode for cleanup scripts ${colors.gray}(default: on)${colors.reset}
-                             ${colors.dim}When enabled, all DROP statements are commented out${colors.reset}
-                             ${colors.dim}Use --cleanupDryRun=false to enable actual execution${colors.reset}
+${pc.bold(pc.blue('🔄 ROLLBACK/CLEANUP OPTIONS:'))}
+  ${pc.green('--generateCleanupSQL')}       Generate rollback scripts to undo migrations ${pc.gray('(default: off)')}
+                             ${pc.dim('Creates rollback-* directories with reverse migration scripts')}
+                             ${pc.red('⚠️  These scripts DROP tables/columns - use with caution!')}
+  ${pc.green('--cleanupDryRun')}            Dry-run mode for cleanup scripts ${pc.gray('(default: on)')}
+                             ${pc.dim('When enabled, all DROP statements are commented out')}
+                             ${pc.dim('Use --cleanupDryRun=false to enable actual execution')}
 
-${colors.bright}${colors.blue}❓ OTHER:${colors.reset}
-  ${colors.green}-h, --help${colors.reset}                 Show this help message
+${pc.bold(pc.blue('❓ OTHER:'))}
+  ${pc.green('-h, --help')}                 Show this help message
 
-${colors.bright}${colors.magenta}📚 EXAMPLES:${colors.reset}
+${pc.bold(pc.magenta('📚 EXAMPLES:'))}
 
-  ${colors.cyan}●${colors.reset} Basic comparison:
-    ${colors.dim}$ bun run compare-db-schemas.ts -c db-config.json${colors.reset}
+  ${pc.cyan('●')} Basic comparison:
+    ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json')}
 
-  ${colors.cyan}●${colors.reset} Dump only source database (no comparison):
-    ${colors.dim}$ bun run compare-db-schemas.ts -s $SOURCE_DB_URL --generateFullMigrations -d ./dumps${colors.reset}
+  ${pc.cyan('●')} Dump only source database (no comparison):
+    ${pc.dim('$ bun run compare-db-schemas.ts -s $SOURCE_DB_URL --generateFullMigrations -d ./dumps')}
 
-  ${colors.cyan}●${colors.reset} Compare with filters:
-    ${colors.dim}$ bun run compare-db-schemas.ts -c db-config.json -x extensions graphql${colors.reset}
+  ${pc.cyan('●')} Compare with filters:
+    ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json -x extensions graphql')}
 
-  ${colors.cyan}●${colors.reset} Focus on missing tables only:
-    ${colors.dim}$ bun run compare-db-schemas.ts -c db-config.json --onlyMissingTables${colors.reset}
+  ${pc.cyan('●')} Focus on missing tables only:
+    ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --onlyMissingTables')}
 
-  ${colors.cyan}●${colors.reset} Track schema evolution over time:
-    ${colors.dim}$ bun run compare-db-schemas.ts -c db-config.json --saveHistory${colors.reset}
-    ${colors.dim}$ bun run compare-db-schemas.ts -c db-config.json --compareWith db-schema-diff-2025-01-05.json${colors.reset}
+  ${pc.cyan('●')} Track schema evolution over time:
+    ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --saveHistory')}
+    ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --compareWith db-schema-diff-2025-01-05.json')}
 
-  ${colors.cyan}●${colors.reset} Show only critical breaking changes:
-    ${colors.dim}$ bun run compare-db-schemas.ts -c db-config.json --criticalOnly${colors.reset}
+  ${pc.cyan('●')} Show only critical breaking changes:
+    ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --criticalOnly')}
 
-  ${colors.cyan}●${colors.reset} Generate full database dumps for local cloning:
-    ${colors.dim}$ bun run compare-db-schemas.ts -c db-config.json --generateFullMigrations -d ./migrations${colors.reset}
+  ${pc.cyan('●')} Generate full database dumps for local cloning:
+    ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --generateFullMigrations -d ./migrations')}
 
-${colors.bright}${colors.magenta}⚙️  CONFIG FILE FORMAT${colors.reset} ${colors.gray}(db-config.json):${colors.reset}
+${pc.bold(pc.magenta('⚙️  CONFIG FILE FORMAT'))} ${pc.gray('(db-config.json):')}
 
-  ${colors.yellow}For comparison mode:${colors.reset}
-  ${colors.dim}{
+  ${pc.yellow('For comparison mode:')}
+  ${pc.dim(`{
     "source": "postgresql://user:pass@host:port/prod_db",
     "target": "postgresql://user:pass@host:port/dev_db",
     "excludeTables": ["migrations", "schema_migrations"],
     "skipSchemas": ["extensions", "graphql", "realtime"],
     "outputDir": "migrations"
-  }${colors.reset}
+  }`)}
 
-  ${colors.yellow}For dump-only mode (omit target):${colors.reset}
-  ${colors.dim}{
+  ${pc.yellow('For dump-only mode (omit target):')}
+  ${pc.dim(`{
     "source": "postgresql://user:pass@host:port/prod_db",
     "excludeTables": ["migrations", "schema_migrations"],
     "skipSchemas": ["extensions", "graphql", "realtime"],
     "outputDir": "dumps"
-  }${colors.reset}
+  }`)}
 
-${colors.bright}${colors.magenta}🔗 CONNECTION URL FORMAT:${colors.reset}
-  ${colors.dim}postgresql://user:password@host:port/database
-  postgres://user:password@host:port/database${colors.reset}
+${pc.bold(pc.magenta('🔗 CONNECTION URL FORMAT:'))}
+  ${pc.dim(`postgresql://user:password@host:port/database
+  postgres://user:password@host:port/database`)}
 
-  ${colors.yellow}💡 Tip:${colors.reset} ${colors.gray}Use environment variables for security:${colors.reset}
-     ${colors.dim}-s $PROD_DB_URL -t $DEV_DB_URL${colors.reset}
+  ${pc.yellow('💡 Tip:')} ${pc.gray('Use environment variables for security:')}
+     ${pc.dim('-s $PROD_DB_URL -t $DEV_DB_URL')}
 
-${colors.bright}${colors.green}✨ FEATURES:${colors.reset}
-  ${colors.green}✓${colors.reset} Automatic schema discovery across all database schemas
-  ${colors.green}✓${colors.reset} Bidirectional sync analysis (what changes are needed both ways)
-  ${colors.green}✓${colors.reset} Schema health score and recommendations
-  ${colors.green}✓${colors.reset} Beautiful markdown reports with tables and emojis
-  ${colors.green}✓${colors.reset} Historical comparison and drift detection
-  ${colors.green}✓${colors.reset} Flexible filtering for focused analysis
-  ${colors.green}✓${colors.reset} Dump-only mode for single database exports
+${pc.bold(pc.green('✨ FEATURES:'))}
+  ${pc.green('✓')} Automatic schema discovery across all database schemas
+  ${pc.green('✓')} Bidirectional sync analysis (what changes are needed both ways)
+  ${pc.green('✓')} Schema health score and recommendations
+  ${pc.green('✓')} Beautiful markdown reports with tables and emojis
+  ${pc.green('✓')} Historical comparison and drift detection
+  ${pc.green('✓')} Flexible filtering for focused analysis
+  ${pc.green('✓')} Dump-only mode for single database exports
 
 `);
+
+  p.outro(pc.dim('Run without arguments for interactive mode'));
 }
 
 // Load config from file

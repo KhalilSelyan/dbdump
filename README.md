@@ -4,6 +4,7 @@ A powerful PostgreSQL schema comparison tool built with Bun. Compare schemas bet
 
 ## ✨ Features
 
+- 🎯 **Interactive Mode** - Guided CLI experience with prompts when running without arguments
 - 🔍 **Deep Schema Comparison** - Tables, columns, indexes, constraints, foreign keys, triggers, policies, enums, functions
 - 🔄 **Bidirectional Migrations** - Generate SQL to sync in either direction
 - 📊 **Health Metrics** - Get a health score and identify issues with configurable warnings
@@ -11,7 +12,7 @@ A powerful PostgreSQL schema comparison tool built with Bun. Compare schemas bet
 - 📝 **Detailed Reports** - Beautiful markdown reports with all differences
 - 💾 **Full Database Dumps** - Export complete schemas for local recreation
 - 🎨 **Organized Output** - Split migrations into logical files (tables, indexes, constraints, etc.)
-- 🎨 **Colorful Terminal Output** - Easy-to-read colored console output with progress indicators
+- 🎨 **Modern CLI** - Beautiful terminal output with spinners, progress indicators, and clack prompts
 - ⚡ **Transaction Wrappers** - Wrap migrations in BEGIN/COMMIT blocks with configurable scope
 - 🔗 **Dependency Sorting** - Automatically orders tables by foreign key dependencies
 - 🔄 **Circular Dependency Handling** - Handles circular FK relationships with DEFERRABLE constraints
@@ -23,6 +24,7 @@ A powerful PostgreSQL schema comparison tool built with Bun. Compare schemas bet
 - 📄 **JSON Output** - Machine-readable output for tooling integration
 - 👁️ **Dry-Run Mode** - Preview migrations without writing files
 - 📈 **Enhanced Console Output** - Migration summaries with change statistics
+- 📦 **Standalone Binary** - Compile to single executable for easy distribution
 
 ## 🚀 Quick Start
 
@@ -34,67 +36,132 @@ curl -fsSL https://bun.sh/install | bash
 git clone https://github.com/KhalilSelyan/dbdump
 cd dbdump
 
-# Copy example config
-cp db-config.example.json db-config.json
+# Install dependencies
+bun install
 
-# Edit with your database URLs
-nano db-config.json
+# Option 1: Interactive mode (easiest!)
+bun run compareordumpdbs.ts
 
-# Run comparison
-bun run compareordumpdbs.ts -c db-config.json
+# Option 2: Build binary and use it
+bun run build
+./dbdump
+
+# Option 3: Install globally
+bun run install-global
+dbdump  # Now available anywhere!
 ```
 
+## 📦 Building & Installation
+
+### Build Standalone Binary
+
+Compile to a single executable:
+
+```bash
+bun run build
+```
+
+This creates a `./dbdump` binary that you can distribute or run directly.
+
+### Install Globally
+
+Install the binary system-wide:
+
+```bash
+bun run install-global
+```
+
+This installs to `/usr/local/bin/dbdump`, making it available from anywhere:
+
+```bash
+dbdump --help
+dbdump -c db-config.json
+```
+
+### NPM Scripts Available
+
+- `bun run compare` - Run the tool with TypeScript source
+- `bun run help` - Show help message
+- `bun run build` - Compile to standalone binary
+- `bun run install-global` - Build and install globally
+
 ## 📖 Usage
+
+### Interactive Mode (Recommended)
+
+Simply run without arguments for a guided experience:
+
+```bash
+# Using source
+bun run compareordumpdbs.ts
+
+# Using binary
+./dbdump
+
+# Or if installed globally
+dbdump
+```
+
+The interactive mode will guide you through:
+- Source and target database URLs
+- Comparison vs dump-only mode
+- Output directory and format
+- Migration numbering
+- Advanced options (transactions, dependencies, etc.)
 
 ### Compare Two Databases
 
 ```bash
+# With config file
 bun run compareordumpdbs.ts -c db-config.json
+
+# Or directly with URLs
+./dbdump -s $SOURCE_DB_URL -t $TARGET_DB_URL
 ```
 
 ### Generate Full Database Dumps
 
 ```bash
-bun run compareordumpdbs.ts -c db-config.json --generateFullMigrations
+./dbdump -c db-config.json --generateFullMigrations
 ```
 
 ### With Transaction Wrappers
 
 ```bash
 # Each migration file gets its own transaction
-bun run compareordumpdbs.ts -c db-config.json --useTransactions
+./dbdump -c db-config.json --useTransactions
 
 # Single transaction across all files
-bun run compareordumpdbs.ts -c db-config.json --useTransactions --transactionScope single
+./dbdump -c db-config.json --useTransactions --transactionScope single
 ```
 
 ### Generate Rollback Scripts
 
 ```bash
 # Generate rollback scripts in dry-run mode (safe, all DROP statements commented)
-bun run compareordumpdbs.ts -c db-config.json --generateCleanupSQL
+./dbdump -c db-config.json --generateCleanupSQL
 
 # Enable actual execution (DANGEROUS - will execute DROP statements)
-bun run compareordumpdbs.ts -c db-config.json --generateCleanupSQL --cleanupDryRun=false
+./dbdump -c db-config.json --generateCleanupSQL --cleanupDryRun=false
 ```
 
 ### Dump Single Database (No Comparison)
 
 ```bash
-bun run compareordumpdbs.ts -s $DATABASE_URL --generateFullMigrations
+./dbdump -s $DATABASE_URL --generateFullMigrations
 ```
 
 ### With Filters
 
 ```bash
 # Skip certain schemas
-bun run compareordumpdbs.ts -c db-config.json -x extensions graphql realtime
+./dbdump -c db-config.json -x extensions graphql realtime
 
 # Only show missing tables
-bun run compareordumpdbs.ts -c db-config.json --onlyMissingTables
+./dbdump -c db-config.json --onlyMissingTables
 
 # Only show breaking changes
-bun run compareordumpdbs.ts -c db-config.json --criticalOnly
+./dbdump -c db-config.json --criticalOnly
 ```
 
 ## ⚙️ Configuration

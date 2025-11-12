@@ -46,6 +46,37 @@ function isEmptySQL(sql: string): boolean {
   return false;
 }
 
+// Helper function to generate migration summary
+function generateMigrationSummary(
+  diff: any,
+  sourceMetadata: any,
+  targetMetadata: any,
+  filesCreated: string[]
+) {
+  const tableChanges = diff.tablesOnlyInSource.length + diff.tablesOnlyInTarget.length;
+  let columnChanges = 0;
+  let indexChanges = 0;
+  let constraintChanges = 0;
+
+  for (const table of diff.tablesInBoth) {
+    columnChanges += table.columnsOnlyInSource.length + table.columnsOnlyInTarget.length + table.columnsWithDifferences.length;
+    indexChanges += table.indexesOnlyInSource.length + table.indexesOnlyInTarget.length;
+    constraintChanges += table.constraintsOnlyInSource.length + table.constraintsOnlyInTarget.length +
+                        table.foreignKeysOnlyInSource.length + table.foreignKeysOnlyInTarget.length;
+  }
+
+  const functionChanges = Math.abs((sourceMetadata.functions?.length || 0) - (targetMetadata.functions?.length || 0));
+
+  return {
+    tables: tableChanges,
+    columns: columnChanges,
+    indexes: indexChanges,
+    constraints: constraintChanges,
+    functions: functionChanges,
+    filesCreated: filesCreated.length,
+  };
+}
+
 // Helper function to format differences as JSON
 function formatDifferencesAsJSON(diff: any, sourceMetadata: any, targetMetadata: any) {
   // Extract table changes
@@ -419,18 +450,38 @@ async function main() {
     }
 
     // Generate split SQL migration files
-    console.log(`\n${c.subheader(`Generating split SQL migration files...`)}`);
+    const modeLabel = args.dryRun ? 'Previewing split SQL migration files (DRY RUN)' : 'Generating split SQL migration files';
+    console.log(`\n${c.subheader(`${modeLabel}...`)}`);
+
+    if (args.dryRun) {
+      console.log(c.warning(`  ⚠️  DRY-RUN MODE: No files will be written`));
+    }
 
     const splitSourceToTarget = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "source-to-target", transactionScope, sortDependencies, handleCircularDeps);
     const splitTargetToSource = generateSplitMigrationSQL(diff, sourceMetadata, targetMetadata, "target-to-source", transactionScope, sortDependencies, handleCircularDeps);
+
+    // Check for circular dependencies and warn
+    if (handleCircularDeps && sortDependencies) {
+      const tablesSQL = splitSourceToTarget['3-tables'];
+      if (tablesSQL.includes('CIRCULAR DEPENDENCY HANDLING')) {
+        console.log(c.warning(`\n  ⚠️  Circular dependencies detected!`));
+        console.log(c.dim(`  Tables with circular FK relationships will use DEFERRABLE constraints.`));
+        console.log(c.dim(`  Check the generated SQL for details.`));
+      }
+    }
 
     // Create subdirectories for organized output
     const diffSourceTargetDir = `${outputDir}/diff-source-to-target`;
     const diffTargetSourceDir = `${outputDir}/diff-target-to-source`;
 
+    // Track files created
+    const filesCreated: string[] = [];
+
     // Write source-to-target files
     console.log(`\n  ${c.info(`Source ${c.arrow()} Target migrations:`)}`);
-    await Bun.write(`${diffSourceTargetDir}/.gitkeep`, "");
+    if (!args.dryRun) {
+      await Bun.write(`${diffSourceTargetDir}/.gitkeep`, "");
+    }
     for (const [key, sql] of Object.entries(splitSourceToTarget)) {
       // Skip empty files if flag is set
       if (args.skipEmptyFiles && isEmptySQL(sql)) {
@@ -438,13 +489,21 @@ async function main() {
         continue;
       }
       const filename = `${diffSourceTargetDir}/${key}.sql`;
-      await Bun.write(filename, sql);
-      console.log(`    ${c.checkmark()} ${c.path(filename)}`);
+      if (args.dryRun) {
+        const lineCount = sql.split('\n').length;
+        console.log(`    ${c.dim(`[DRY RUN]`)} ${c.path(filename)} ${c.dim(`(${lineCount} lines)`)}`);
+      } else {
+        await Bun.write(filename, sql);
+        filesCreated.push(filename);
+        console.log(`    ${c.checkmark()} ${c.path(filename)}`);
+      }
     }
 
     // Write target-to-source files
     console.log(`\n  ${c.info(`Target ${c.arrow()} Source migrations:`)}`);
-    await Bun.write(`${diffTargetSourceDir}/.gitkeep`, "");
+    if (!args.dryRun) {
+      await Bun.write(`${diffTargetSourceDir}/.gitkeep`, "");
+    }
     for (const [key, sql] of Object.entries(splitTargetToSource)) {
       // Skip empty files if flag is set
       if (args.skipEmptyFiles && isEmptySQL(sql)) {
@@ -452,15 +511,33 @@ async function main() {
         continue;
       }
       const filename = `${diffTargetSourceDir}/${key}.sql`;
-      await Bun.write(filename, sql);
-      console.log(`    ${c.checkmark()} ${c.path(filename)}`);
+      if (args.dryRun) {
+        const lineCount = sql.split('\n').length;
+        console.log(`    ${c.dim(`[DRY RUN]`)} ${c.path(filename)} ${c.dim(`(${lineCount} lines)`)}`);
+      } else {
+        await Bun.write(filename, sql);
+        filesCreated.push(filename);
+        console.log(`    ${c.checkmark()} ${c.path(filename)}`);
+      }
+    }
+
+    // Show migration summary
+    if (!args.dryRun) {
+      const summary = generateMigrationSummary(diff, sourceMetadata, targetMetadata, filesCreated);
+      console.log(`\n${c.subheader('Migration Summary:')}`);
+      if (summary.tables > 0) console.log(`  ${c.info('Tables:')} ${c.count(summary.tables)} changes`);
+      if (summary.columns > 0) console.log(`  ${c.info('Columns:')} ${c.count(summary.columns)} changes`);
+      if (summary.indexes > 0) console.log(`  ${c.info('Indexes:')} ${c.count(summary.indexes)} changes`);
+      if (summary.constraints > 0) console.log(`  ${c.info('Constraints:')} ${c.count(summary.constraints)} changes`);
+      if (summary.functions > 0) console.log(`  ${c.info('Functions:')} ${c.count(summary.functions)} changes`);
+      console.log(`  ${c.highlight('Total files created:')} ${c.count(summary.filesCreated)}`);
     }
   } else {
     console.log(`\n${c.step(`[3/3] Skipping comparison (dump-only mode)...`)}`);
   }
 
   // Generate README (only in comparison mode)
-  if (!dumpOnlyMode) {
+  if (!dumpOnlyMode && !args.dryRun) {
     const readme = generateMigrationReadme(outputPrefix);
     const readmePath = `${outputDir}/${outputPrefix}-MIGRATION-README.md`;
     await Bun.write(readmePath, readme);

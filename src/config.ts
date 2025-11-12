@@ -85,6 +85,9 @@ function parseArguments() {
       format: {
         type: "string",
       },
+      dryRun: {
+        type: "boolean",
+      },
       help: {
         type: "boolean",
         short: "h",
@@ -158,6 +161,7 @@ ${colors.bright}${colors.blue}📁 OUTPUT OPTIONS:${colors.reset}
   ${colors.green}--migrationNumber${colors.reset} <num>    Use migrations-N directory structure ${colors.gray}(e.g., migrations-3)${colors.reset}
   ${colors.green}--skipEmptyFiles${colors.reset}           Skip creation of empty SQL files ${colors.gray}(cleaner git diffs)${colors.reset}
   ${colors.green}--format${colors.reset} <type>            Output format: sql | json | markdown ${colors.gray}(default: sql)${colors.reset}
+  ${colors.green}--dryRun${colors.reset}                   Preview changes without writing files ${colors.gray}(shows what would be generated)${colors.reset}
 
 ${colors.bright}${colors.blue}🔍 FILTER OPTIONS:${colors.reset}
   ${colors.green}-e, --excludeTables${colors.reset} <...>  Exclude specific tables from comparison

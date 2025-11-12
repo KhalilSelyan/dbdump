@@ -303,6 +303,7 @@ export interface CLIArgs {
   migrationNumber?: number;
   skipEmptyFiles?: boolean;
   format?: 'sql' | 'json' | 'markdown';
+  dryRun?: boolean;
   help?: boolean;
 }
 

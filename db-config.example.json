@@ -1,14 +1,28 @@
 {
   "_comment": "Configuration for database schema comparison tool",
-
   "_mode_comparison": "Use both source and target for comparison mode",
   "source": "postgresql://user:password@host:port/prod_database",
   "target": "postgresql://user:password@host:port/dev_database",
-
   "_mode_dump_only": "Omit 'target' to use dump-only mode (requires --generateFullMigrations flag)",
-
   "_options": "Optional configuration",
-  "excludeTables": ["migrations", "schema_migrations"],
-  "skipSchemas": ["extensions", "graphql", "realtime"],
-  "outputDir": "migrations"
+  "excludeTables": [
+    "migrations",
+    "schema_migrations"
+  ],
+  "skipSchemas": [
+    "extensions",
+    "graphql",
+    "realtime"
+  ],
+  "outputDir": "migrations",
+  "incrementalMode": true,
+  "_incrementalMode_note": "When true, automatically enables skipEmptyFiles and optimizes for incremental diffs",
+  "skipEmptyFiles": true,
+  "_skipEmptyFiles_note": "Skip creation of empty SQL files (cleaner git diffs)",
+  "format": "sql",
+  "_format_note": "Output format: 'sql' (default), 'json', or 'markdown'",
+  "transactionScope": "per-file",
+  "_transactionScope_note": "Transaction scope: 'per-file', 'single', or 'none'",
+  "migrationNumbering": "manual",
+  "_migrationNumbering_note": "'manual' requires --migrationNumber flag, 'auto' auto-detects next number (future feature)"
 }

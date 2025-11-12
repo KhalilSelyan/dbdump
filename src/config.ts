@@ -82,6 +82,9 @@ function parseArguments() {
       skipEmptyFiles: {
         type: "boolean",
       },
+      format: {
+        type: "string",
+      },
       help: {
         type: "boolean",
         short: "h",
@@ -99,6 +102,14 @@ function parseArguments() {
       throw new Error(`Invalid migration number: ${result.migrationNumber}`);
     }
     result.migrationNumber = num;
+  }
+
+  // Validate format option
+  if (result.format !== undefined) {
+    const validFormats = ['sql', 'json', 'markdown'];
+    if (!validFormats.includes(result.format as string)) {
+      throw new Error(`Invalid format: ${result.format}. Must be one of: ${validFormats.join(', ')}`);
+    }
   }
 
   return result;
@@ -146,6 +157,7 @@ ${colors.bright}${colors.blue}📁 OUTPUT OPTIONS:${colors.reset}
   ${colors.green}-d, --outputDir${colors.reset} <dir>      Output directory for generated files
   ${colors.green}--migrationNumber${colors.reset} <num>    Use migrations-N directory structure ${colors.gray}(e.g., migrations-3)${colors.reset}
   ${colors.green}--skipEmptyFiles${colors.reset}           Skip creation of empty SQL files ${colors.gray}(cleaner git diffs)${colors.reset}
+  ${colors.green}--format${colors.reset} <type>            Output format: sql | json | markdown ${colors.gray}(default: sql)${colors.reset}
 
 ${colors.bright}${colors.blue}🔍 FILTER OPTIONS:${colors.reset}
   ${colors.green}-e, --excludeTables${colors.reset} <...>  Exclude specific tables from comparison
@@ -249,15 +261,23 @@ ${colors.bright}${colors.green}✨ FEATURES:${colors.reset}
 }
 
 // Load config from file
-async function loadConfig(configPath: string): Promise<Config> {
+async function loadConfig(configPath: string): Promise<ConfigFile> {
   try {
     const file = Bun.file(configPath);
-    const config: Config = await file.json();
+    const config: ConfigFile = await file.json();
 
-    if (!config.source || !config.target) {
+    if (!config.source) {
       throw new Error(
-        "Config file must contain 'source' and 'target' properties"
+        "Config file must contain 'source' property"
       );
+    }
+
+    // Apply incrementalMode preset
+    if (config.incrementalMode) {
+      // incrementalMode enables skipEmptyFiles by default
+      if (config.skipEmptyFiles === undefined) {
+        config.skipEmptyFiles = true;
+      }
     }
 
     return config;

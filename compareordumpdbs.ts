@@ -46,6 +46,92 @@ function isEmptySQL(sql: string): boolean {
   return false;
 }
 
+// Helper function to format differences as JSON
+function formatDifferencesAsJSON(diff: any, sourceMetadata: any, targetMetadata: any) {
+  // Extract table changes
+  const tableChanges = {
+    added: diff.tablesOnlyInSource.map((t: any) => `${t.schema}.${t.table}`),
+    removed: diff.tablesOnlyInTarget.map((t: any) => `${t.schema}.${t.table}`),
+    modified: diff.tablesInBoth.map((t: any) => ({
+      table: `${t.table_schema}.${t.table_name}`,
+      changes: [
+        ...t.columnsOnlyInSource.map((c: any) => ({
+          type: 'column_added',
+          column: c.column_name,
+          dataType: c.data_type
+        })),
+        ...t.columnsOnlyInTarget.map((c: any) => ({
+          type: 'column_removed',
+          column: c.column_name
+        })),
+        ...t.columnsWithDifferences.map((c: any) => ({
+          type: 'column_modified',
+          column: c.column_name,
+          differences: c.differences
+        })),
+        ...t.indexesOnlyInSource.map((i: any) => ({
+          type: 'index_added',
+          index: i.index_name
+        })),
+        ...t.indexesOnlyInTarget.map((i: any) => ({
+          type: 'index_removed',
+          index: i.index_name
+        })),
+        ...t.foreignKeysOnlyInSource.map((fk: any) => ({
+          type: 'foreign_key_added',
+          constraint: fk.constraint_name
+        })),
+        ...t.foreignKeysOnlyInTarget.map((fk: any) => ({
+          type: 'foreign_key_removed',
+          constraint: fk.constraint_name
+        }))
+      ]
+    })).filter((t: any) => t.changes.length > 0)
+  };
+
+  // Extract function changes
+  const sourceFunctions = new Set(sourceMetadata.functions.map((f: any) => `${f.schema}.${f.name}`));
+  const targetFunctions = new Set(targetMetadata?.functions?.map((f: any) => `${f.schema}.${f.name}`) || []);
+
+  const functionChanges = {
+    added: Array.from(sourceFunctions).filter(f => !targetFunctions.has(f)),
+    removed: Array.from(targetFunctions).filter(f => !sourceFunctions.has(f)),
+    modified: []
+  };
+
+  // Calculate summary
+  const totalChanges =
+    tableChanges.added.length +
+    tableChanges.removed.length +
+    tableChanges.modified.reduce((sum: number, t: any) => sum + t.changes.length, 0) +
+    functionChanges.added.length +
+    functionChanges.removed.length;
+
+  const hasBreakingChanges =
+    tableChanges.removed.length > 0 ||
+    tableChanges.modified.some((t: any) =>
+      t.changes.some((c: any) =>
+        c.type === 'column_removed' ||
+        c.type === 'column_modified' ||
+        c.type === 'foreign_key_removed'
+      )
+    );
+
+  return {
+    differences: {
+      tables: tableChanges,
+      functions: functionChanges,
+      triggers: { added: [], removed: [], modified: [] }, // TODO: Add trigger tracking
+      policies: { added: [], removed: [], modified: [] }  // TODO: Add policy tracking
+    },
+    summary: {
+      totalChanges,
+      breaking: hasBreakingChanges,
+      fileCount: 0 // Will be calculated if generating files
+    }
+  };
+}
+
 // Main function
 async function main() {
   const args = parseArguments();
@@ -71,6 +157,17 @@ async function main() {
       []) as string[];
     skipSchemas = (args.skipSchemas || config.skipSchemas || []) as string[];
     outputDir = (args.outputDir || config.outputDir || ".") as string;
+
+    // Merge config values with CLI args (CLI args take precedence)
+    if (args.skipEmptyFiles === undefined && config.skipEmptyFiles !== undefined) {
+      args.skipEmptyFiles = config.skipEmptyFiles;
+    }
+    if (args.transactionScope === undefined && config.transactionScope !== undefined) {
+      args.transactionScope = config.transactionScope;
+    }
+    if (args.format === undefined && config.format !== undefined) {
+      args.format = config.format;
+    }
   } else {
     // Load from command line arguments
     if (!args.source) {
@@ -203,6 +300,13 @@ async function main() {
 
     console.log(`\n${c.step(`[4/5] Comparing schemas...`)}`);
     diff = compareSchemas(sourceMetadata, targetMetadata);
+
+    // Early exit for JSON format output
+    if (args.format === 'json') {
+      const jsonOutput = formatDifferencesAsJSON(diff, sourceMetadata, targetMetadata);
+      console.log(JSON.stringify(jsonOutput, null, 2));
+      process.exit(0);
+    }
   }
 
   // Skip comparison-related operations in dump-only mode

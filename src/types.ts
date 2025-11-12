@@ -272,6 +272,13 @@ export interface ConfigFile {
   excludeTables?: string[];
   skipSchemas?: string[];
   outputDir?: string;
+  // Priority 2: Enhanced config options
+  incrementalMode?: boolean;
+  outputFormat?: 'split-files' | 'single-file';
+  skipEmptyFiles?: boolean;
+  transactionScope?: 'per-file' | 'single' | 'none';
+  migrationNumbering?: 'auto' | 'manual';
+  format?: 'sql' | 'json' | 'markdown';
 }
 
 export interface CLIArgs {
@@ -295,6 +302,7 @@ export interface CLIArgs {
   handleCircularDeps?: boolean;
   migrationNumber?: number;
   skipEmptyFiles?: boolean;
+  format?: 'sql' | 'json' | 'markdown';
   help?: boolean;
 }
 

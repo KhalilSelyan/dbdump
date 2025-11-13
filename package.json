@@ -1,6 +1,6 @@
 {
   "name": "dbdump",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A powerful PostgreSQL schema comparison tool with advanced migration features",
   "main": "src/api.ts",
   "type": "module",

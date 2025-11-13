@@ -112,6 +112,8 @@ dbdump
 **Smart Defaults:**
 - Skips common system schemas: `extensions`, `graphql`, `realtime`, `auth`, `storage`, `vault`, `pgsodium`
 - Excludes typical migration tables: `migrations`, `schema_migrations`, `drizzle_migrations`
+- Skips Supabase-specific extensions: `hypopg`, `pg_cron`, `pg_graphql`, `supabase_vault`, `wrappers`, etc.
+- Skips FDW wrapper functions: `*_fdw_handler`, `*_fdw_validator`, `wrappers_*`
 - Skips empty SQL files by default (cleaner git diffs)
 - Output directory defaults to `./migrations`
 - Format defaults to SQL
@@ -203,6 +205,12 @@ bun run compareordumpdbs.ts -c db-config.json
 # Skip certain schemas
 ./dbdump -c db-config.json -x extensions graphql realtime
 
+# Skip Supabase extensions
+./dbdump -c db-config.json -X hypopg pg_cron supabase_vault
+
+# Skip FDW wrapper functions (supports wildcards)
+./dbdump -c db-config.json -F "*_fdw_*" "wrappers_*"
+
 # Only show missing tables
 ./dbdump -c db-config.json --onlyMissingTables
 
@@ -238,6 +246,8 @@ Create a `db-config.json` for reusable configurations:
   "target": "postgresql://user:pass@host:port/target_db",
   "excludeTables": ["migrations", "schema_migrations"],
   "skipSchemas": ["extensions", "graphql", "realtime"],
+  "skipExtensions": ["hypopg", "pg_cron", "supabase_vault", "wrappers"],
+  "skipFunctions": ["*_fdw_*", "wrappers_*"],
   "outputDir": ".",
   "skipEmptyFiles": true,
   "format": "sql"
@@ -297,23 +307,25 @@ MISSING_PRIMARY_KEY public.logs  # Logs table doesn't need PK
 ├── db-schema-warnings-source.md         # Warning report for source DB
 ├── db-schema-warnings-target.md         # Warning report for target DB
 ├── diff-source-to-target/               # Sync target with source
-│   ├── 1-extensions-enums-functions.sql
+│   ├── 1-extensions-enums.sql
 │   ├── 2-sequences.sql
 │   ├── 3-tables.sql
 │   ├── 4-indexes.sql
 │   ├── 5-constraints-foreign-keys.sql
-│   ├── 6-triggers.sql
-│   └── 7-policies.sql
+│   ├── 6-functions.sql
+│   ├── 7-triggers.sql
+│   └── 8-policies.sql
 ├── diff-target-to-source/               # Sync source with target
 │   └── (same structure)
 ├── rollback-source-to-target/           # Rollback source→target migration
-│   ├── 7-policies.sql                   # Execute in REVERSE order
-│   ├── 6-triggers.sql                   # (7→6→5→4→3→2→1)
+│   ├── 8-policies.sql                   # Execute in REVERSE order
+│   ├── 7-triggers.sql                   # (8→7→6→5→4→3→2→1)
+│   ├── 6-functions.sql
 │   ├── 5-constraints-foreign-keys.sql
 │   ├── 4-indexes.sql
 │   ├── 3-tables.sql                     # ⚠️ Contains DROP statements
 │   ├── 2-sequences.sql
-│   └── 1-extensions-enums-functions.sql
+│   └── 1-extensions-enums.sql
 ├── rollback-target-to-source/           # Rollback target→source migration
 │   └── (same structure)
 ├── full-source/                         # Complete source schema
@@ -468,6 +480,8 @@ Understand what needs to sync in both directions:
 ```
 -e, --excludeTables <...>  Exclude specific tables from comparison
 -x, --skipSchemas <...>    Skip entire schemas (e.g., extensions, graphql)
+-X, --skipExtensions <...> Skip specific extensions (e.g., hypopg, pg_cron)
+-F, --skipFunctions <...>  Skip functions by pattern (e.g., "*_fdw_*", "wrappers_*")
 --onlyMissingTables        Show only tables that exist in one DB but not the other
 --onlyColumnDiffs          Show only column-level differences
 --criticalOnly             Show only breaking changes (type changes, nullability)
@@ -701,6 +715,8 @@ Use config file for cleaner commands:
   "outputDir": "./migrations",
   "excludeTables": ["migrations", "schema_migrations"],
   "skipSchemas": ["extensions", "graphql"],
+  "skipExtensions": ["hypopg", "supabase_vault"],
+  "skipFunctions": ["*_fdw_*", "wrappers_*"],
   "incrementalMode": true,
   "skipEmptyFiles": true,
   "format": "sql",

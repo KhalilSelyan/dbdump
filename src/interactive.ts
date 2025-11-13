@@ -7,6 +7,7 @@ import { loadConfig } from './config';
 const COMMON_SKIP_SCHEMAS = ['extensions', 'graphql', 'realtime', 'auth', 'storage', 'vault', 'pgsodium'];
 const COMMON_EXCLUDE_TABLES = ['migrations', 'schema_migrations', 'drizzle_migrations'];
 const COMMON_SKIP_EXTENSIONS = ['hypopg', 'index_advisor', 'pg_cron', 'pg_graphql', 'pg_net', 'pg_stat_statements', 'pgsodium', 'supabase_vault', 'wrappers'];
+const COMMON_SKIP_FUNCTIONS = ['*_fdw_handler', '*_fdw_validator', 'wrappers_*'];
 
 /**
  * Detect config files in common locations
@@ -282,6 +283,7 @@ ${pc.yellow('•')} Press ${pc.cyan('Ctrl+C')} anytime to cancel`,
   let skipSchemas: string[] | undefined;
   let excludeTables: string[] | undefined;
   let skipExtensions: string[] | undefined;
+  let skipFunctions: string[] | undefined;
   let skipEmptyFiles: boolean;
   let dryRun: boolean = false;
 
@@ -290,11 +292,13 @@ ${pc.yellow('•')} Press ${pc.cyan('Ctrl+C')} anytime to cancel`,
     skipSchemas = loadedConfig?.skipSchemas || COMMON_SKIP_SCHEMAS;
     excludeTables = loadedConfig?.excludeTables || COMMON_EXCLUDE_TABLES;
     skipExtensions = loadedConfig?.skipExtensions || COMMON_SKIP_EXTENSIONS;
+    skipFunctions = loadedConfig?.skipFunctions || COMMON_SKIP_FUNCTIONS;
     skipEmptyFiles = loadedConfig?.skipEmptyFiles !== undefined ? loadedConfig.skipEmptyFiles : true;
 
     p.log.info(`${pc.dim('Skipping schemas:')} ${pc.cyan(skipSchemas.join(', '))}`);
     p.log.info(`${pc.dim('Excluding tables:')} ${pc.cyan(excludeTables.join(', '))}`);
     p.log.info(`${pc.dim('Skipping extensions:')} ${pc.cyan(skipExtensions.join(', '))}`);
+    p.log.info(`${pc.dim('Skipping functions:')} ${pc.cyan(skipFunctions.join(', '))}`);
     p.log.info(`${pc.dim('Skip empty files:')} ${pc.cyan(skipEmptyFiles ? 'Yes' : 'No')}`);
   } else {
     // Ask for custom values
@@ -370,6 +374,21 @@ ${pc.yellow('•')} Press ${pc.cyan('Ctrl+C')} anytime to cancel`,
 
       if (skipExtensionsInput) {
         skipExtensions = (skipExtensionsInput as string).split(',').map(s => s.trim());
+      }
+
+      const skipFunctionsInput = await p.text({
+        message: 'Skip functions (comma-separated patterns):',
+        placeholder: COMMON_SKIP_FUNCTIONS.join(','),
+        defaultValue: loadedConfig?.skipFunctions?.join(','),
+      });
+
+      if (p.isCancel(skipFunctionsInput)) {
+        p.cancel('Operation cancelled');
+        process.exit(0);
+      }
+
+      if (skipFunctionsInput) {
+        skipFunctions = (skipFunctionsInput as string).split(',').map(s => s.trim());
       }
     }
 
@@ -449,7 +468,8 @@ ${pc.dim('Output:')} ${pc.cyan(outputDir as string)}
 ${pc.dim('Format:')} ${pc.cyan(format as string)}
 ${skipSchemas ? `${pc.dim('Skip schemas:')} ${pc.cyan(skipSchemas.length + ' schemas')}` : ''}
 ${excludeTables ? `${pc.dim('Exclude tables:')} ${pc.cyan(excludeTables.length + ' tables')}` : ''}
-${skipExtensions ? `${pc.dim('Skip extensions:')} ${pc.cyan(skipExtensions.length + ' extensions')}` : ''}`,
+${skipExtensions ? `${pc.dim('Skip extensions:')} ${pc.cyan(skipExtensions.length + ' extensions')}` : ''}
+${skipFunctions ? `${pc.dim('Skip functions:')} ${pc.cyan(skipFunctions.length + ' patterns')}` : ''}`,
     'Ready to proceed'
   );
 
@@ -464,6 +484,7 @@ ${skipExtensions ? `${pc.dim('Skip extensions:')} ${pc.cyan(skipExtensions.lengt
     skipSchemas,
     excludeTables,
     skipExtensions,
+    skipFunctions,
     generateFullMigrations,
     useTransactions,
   };

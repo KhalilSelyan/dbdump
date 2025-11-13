@@ -277,6 +277,7 @@ export interface ConfigFile {
   excludeTables?: string[];
   skipSchemas?: string[];
   skipExtensions?: string[];
+  skipFunctions?: string[];
   outputDir?: string;
   // Priority 2: Enhanced config options
   incrementalMode?: boolean;
@@ -296,6 +297,7 @@ export interface CLIArgs {
   excludeTables?: string[];
   skipSchemas?: string[];
   skipExtensions?: string[];
+  skipFunctions?: string[];
   onlyMissingTables?: boolean;
   onlyColumnDiffs?: boolean;
   criticalOnly?: boolean;

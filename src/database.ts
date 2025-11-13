@@ -2,6 +2,23 @@ import { Client } from 'pg';
 import type { SchemaMetadata, TableInfo, EnumInfo, ExtensionInfo, FunctionInfo } from './types';
 import { parsePostgresArray } from './utils';
 
+// Helper function to match strings against patterns with wildcards
+function matchesPattern(value: string, pattern: string): boolean {
+  // If no wildcard, do exact match
+  if (!pattern.includes('*')) {
+    return value === pattern;
+  }
+
+  // Convert glob pattern to regex
+  // Escape special regex characters except *
+  const regexPattern = pattern
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')  // Escape special chars
+    .replace(/\*/g, '.*');                    // Convert * to .*
+
+  const regex = new RegExp(`^${regexPattern}$`);
+  return regex.test(value);
+}
+
 // Helper function for exponential backoff retry logic
 async function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -93,7 +110,8 @@ async function fetchAllSchemas(
   excludeTables: string[],
   dbLabel: string,
   silent: boolean = false,
-  skipExtensions: string[] = []
+  skipExtensions: string[] = [],
+  skipFunctions: string[] = []
 ): Promise<SchemaMetadata> {
   const client = new Client({ connectionString: connectionUrl });
 
@@ -563,7 +581,7 @@ async function fetchAllSchemas(
     `;
 
     const functionResult = await client.query(functionQuery, [schemas]);
-    const functions: FunctionInfo[] = functionResult.rows.map(row => ({
+    let functions: FunctionInfo[] = functionResult.rows.map(row => ({
       schema: row.schema,
       name: row.name,
       language: row.language,
@@ -571,6 +589,24 @@ async function fetchAllSchemas(
       return_type: row.return_type,
       argument_types: row.argument_types,
     }));
+
+    // Filter out skipped functions (supports wildcards like "*_fdw_*")
+    if (skipFunctions.length > 0) {
+      functions = functions.filter(func => {
+        const funcName = func.name;
+        const qualifiedName = `${func.schema}.${func.name}`;
+
+        // Check if function matches any skip pattern
+        for (const pattern of skipFunctions) {
+          // Try matching against both qualified and unqualified names
+          if (matchesPattern(funcName, pattern) || matchesPattern(qualifiedName, pattern)) {
+            return false; // Skip this function
+          }
+        }
+        return true; // Keep this function
+      });
+    }
+
     if (!silent) console.log(" ✓");
 
     return { tables, enums, extensions, functions };

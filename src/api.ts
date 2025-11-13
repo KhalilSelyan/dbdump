@@ -67,6 +67,7 @@ export interface MigrationOptions {
   excludeTables?: string[];
   skipSchemas?: string[];
   skipExtensions?: string[];
+  skipFunctions?: string[];
   onlyMissingTables?: boolean;
   onlyColumnDiffs?: boolean;
   criticalOnly?: boolean;
@@ -115,6 +116,7 @@ export interface FullDumpOptions {
   excludeTables?: string[];
   skipSchemas?: string[];
   skipExtensions?: string[];
+  skipFunctions?: string[];
 
   // SQL generation options
   useTransactions?: boolean;
@@ -316,7 +318,8 @@ export async function generateMigration(
     options.excludeTables || [],
     "source",
     true, // silent = true for API
-    options.skipExtensions || []
+    options.skipExtensions || [],
+    options.skipFunctions || []
   );
 
   const targetMetadata = await fetchAllSchemas(
@@ -325,7 +328,8 @@ export async function generateMigration(
     options.excludeTables || [],
     "target",
     true, // silent = true for API
-    options.skipExtensions || []
+    options.skipExtensions || [],
+    options.skipFunctions || []
   );
 
   // Compare schemas
@@ -622,7 +626,8 @@ export async function generateFullDump(
     options.excludeTables || [],
     "source",
     true, // silent = true for API
-    options.skipExtensions || []
+    options.skipExtensions || [],
+    options.skipFunctions || []
   );
   console.error('[dbdump] Metadata fetched successfully');
 
@@ -715,7 +720,8 @@ export async function compareWithHistory(
     options.excludeTables || [],
     "current",
     true, // silent = true for API
-    options.skipExtensions || []
+    options.skipExtensions || [],
+    options.skipFunctions || []
   );
 
   // Reconstruct metadata from history (simplified - would need full reconstruction)

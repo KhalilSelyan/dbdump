@@ -596,16 +596,22 @@ export async function generateMigration(
 export async function generateFullDump(
   options: FullDumpOptions
 ): Promise<string[]> {
+  console.error('[dbdump] generateFullDump started');
+
   // Discover schemas
+  console.error('[dbdump] Discovering schemas...');
   const schemaNames = await fetchSchemas(options.dbUrl);
+  console.error(`[dbdump] Found ${schemaNames.length} schemas:`, schemaNames);
   let allSchemas = [...schemaNames];
 
   // Apply schema filters
   if (options.skipSchemas && options.skipSchemas.length > 0) {
     allSchemas = allSchemas.filter(schema => !options.skipSchemas!.includes(schema));
+    console.error(`[dbdump] After filtering: ${allSchemas.length} schemas`);
   }
 
   // Fetch metadata (silent mode for API usage)
+  console.error('[dbdump] Fetching metadata...');
   const metadata = await fetchAllSchemas(
     options.dbUrl,
     allSchemas,
@@ -613,6 +619,7 @@ export async function generateFullDump(
     "source",
     true // silent = true for API
   );
+  console.error('[dbdump] Metadata fetched successfully');
 
   // Handle JSON format output
   if (options.format === 'json') {

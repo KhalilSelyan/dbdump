@@ -89,7 +89,7 @@ dbdump -c db-config.json
 
 ### Interactive Mode (Recommended)
 
-Simply run without arguments for a guided experience:
+Simply run without arguments for a guided experience with smart defaults:
 
 ```bash
 # Using source
@@ -102,12 +102,58 @@ bun run compareordumpdbs.ts
 dbdump
 ```
 
-The interactive mode will guide you through:
-- Source and target database URLs
-- Comparison vs dump-only mode
-- Output directory and format
-- Migration numbering
-- Advanced options (transactions, dependencies, etc.)
+#### Smart Features
+
+**Auto-Detection:**
+- Automatically finds and offers to load `db-config.json` or `dbdump.config.json`
+- Detects `$SOURCE_DB_URL` and `$TARGET_DB_URL` environment variables
+- Uses `$DATABASE_URL` as fallback for source database
+
+**Smart Defaults:**
+- Skips common system schemas: `extensions`, `graphql`, `realtime`, `auth`, `storage`, `vault`, `pgsodium`
+- Excludes typical migration tables: `migrations`, `schema_migrations`, `drizzle_migrations`
+- Skips empty SQL files by default (cleaner git diffs)
+- Output directory defaults to `./migrations`
+- Format defaults to SQL
+
+**Streamlined Experience:**
+- **With config file**: 2-3 questions (just confirm settings)
+- **With env vars**: 3-4 questions (mode, output, defaults)
+- **Fresh setup**: 5-7 questions (still faster than 11+)
+- Advanced options are collapsed by default
+
+#### Example Workflows
+
+```bash
+# Workflow 1: Config file detected
+$ ./dbdump
+# ✓ Found db-config.json. Load settings? → Yes
+# → Choose mode: Compare / Dump
+# → Use common defaults? → Yes
+# → Done! 🎉
+
+# Workflow 2: Using environment variables
+$ export SOURCE_DB_URL="postgresql://..."
+$ export TARGET_DB_URL="postgresql://..."
+$ ./dbdump
+# ✓ Found $SOURCE_DB_URL
+# ✓ Found $TARGET_DB_URL
+# → Choose mode: Compare / Dump
+# → Output directory: ./migrations
+# → Use common defaults? → Yes
+# → Done! 🎉
+
+# Workflow 3: Fresh manual setup
+$ ./dbdump
+# → No config file. Have one? → No
+# → Source URL: postgresql://...
+# → Choose mode: Compare
+# → Target URL: postgresql://...
+# → Output directory: ./migrations
+# → Output format: SQL
+# → Use common defaults? → Yes
+# → Done! 🎉
+```
 
 ### Compare Two Databases
 
@@ -166,9 +212,25 @@ bun run compareordumpdbs.ts -c db-config.json
 
 ## ⚙️ Configuration
 
-### Database Configuration
+### Environment Variables
 
-Create a `db-config.json`:
+The tool automatically detects and uses these environment variables in interactive mode:
+
+```bash
+# Primary database URLs
+export SOURCE_DB_URL="postgresql://user:pass@host:port/source_db"
+export TARGET_DB_URL="postgresql://user:pass@host:port/target_db"
+
+# Fallback for source (if SOURCE_DB_URL not set)
+export DATABASE_URL="postgresql://user:pass@host:port/db"
+
+# Then just run
+./dbdump  # Will auto-detect and use these URLs
+```
+
+### Database Configuration File
+
+Create a `db-config.json` for reusable configurations:
 
 ```json
 {
@@ -176,9 +238,17 @@ Create a `db-config.json`:
   "target": "postgresql://user:pass@host:port/target_db",
   "excludeTables": ["migrations", "schema_migrations"],
   "skipSchemas": ["extensions", "graphql", "realtime"],
-  "outputDir": "."
+  "outputDir": ".",
+  "skipEmptyFiles": true,
+  "format": "sql"
 }
 ```
+
+**Supported file names** (auto-detected in interactive mode):
+- `db-config.json` ⭐ (recommended)
+- `dbdump.config.json`
+- `.dbdump.json`
+- `dbdump.json`
 
 ### Warning Configuration
 

@@ -126,11 +126,25 @@ function printHelp() {
 
   console.log(`\n${pc.bold(pc.white('USAGE:'))}
   ${pc.dim('bun run compare-db-schemas.ts [options]')}
+  ${pc.dim('bun run compare-db-schemas.ts')}              ${pc.cyan('# Interactive mode (no args)')}
+
+${pc.bold(pc.magenta('✨ INTERACTIVE MODE:'))}
+  Run without arguments for a guided, interactive setup experience!
+
+  ${pc.cyan('Smart Features:')}
+  ${pc.yellow('•')} Auto-detects config files: ${pc.cyan('db-config.json')}, ${pc.cyan('dbdump.config.json')}
+  ${pc.yellow('•')} Uses environment variables: ${pc.cyan('$SOURCE_DB_URL')}, ${pc.cyan('$TARGET_DB_URL')}
+  ${pc.yellow('•')} Applies sensible defaults (skip system schemas, empty files, etc.)
+  ${pc.yellow('•')} Shows helpful hints and validation at each step
+  ${pc.yellow('•')} Collapses advanced options for quick setup
+
+  ${pc.dim('Typical flow: 2-4 questions instead of 11+')}
 
 ${pc.bold(pc.blue('📡 CONNECTION OPTIONS:'))}
-  ${pc.green('-s, --source')} <url>         Source database URL ${pc.yellow('(required)')}
+  ${pc.green('-s, --source')} <url>         Source database URL ${pc.yellow('(required in CLI mode)')}
   ${pc.green('-t, --target')} <url>         Target database URL ${pc.gray('(optional - omit for dump-only mode)')}
   ${pc.green('-c, --config')} <file>        Load config from JSON file
+                             ${pc.dim('Auto-detected in interactive mode')}
 
 ${pc.bold(pc.blue('📁 OUTPUT OPTIONS:'))}
   ${pc.green('-o, --output')} <prefix>      Output filename prefix ${pc.gray('(default: db-schema-diff)')}
@@ -181,26 +195,40 @@ ${pc.bold(pc.blue('❓ OTHER:'))}
 
 ${pc.bold(pc.magenta('📚 EXAMPLES:'))}
 
-  ${pc.cyan('●')} Basic comparison:
+  ${pc.cyan('●')} Interactive mode (recommended for first-time users):
+    ${pc.dim('$ bun run compare-db-schemas.ts')}
+    ${pc.dim('  # Guides you through all options with smart defaults')}
+
+  ${pc.cyan('●')} Interactive with environment variables:
+    ${pc.dim('$ export SOURCE_DB_URL="postgresql://..."')}
+    ${pc.dim('$ export TARGET_DB_URL="postgresql://..."')}
+    ${pc.dim('$ bun run compare-db-schemas.ts')}
+    ${pc.dim('  # Automatically uses env vars, just confirm settings')}
+
+  ${pc.cyan('●')} Interactive with auto-detected config:
+    ${pc.dim('$ bun run compare-db-schemas.ts')}
+    ${pc.dim('  # Finds db-config.json and asks to use it')}
+
+  ${pc.cyan('●')} CLI mode - Basic comparison:
     ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json')}
 
-  ${pc.cyan('●')} Dump only source database (no comparison):
+  ${pc.cyan('●')} CLI mode - Dump only source database:
     ${pc.dim('$ bun run compare-db-schemas.ts -s $SOURCE_DB_URL --generateFullMigrations -d ./dumps')}
 
-  ${pc.cyan('●')} Compare with filters:
+  ${pc.cyan('●')} CLI mode - Compare with filters:
     ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json -x extensions graphql')}
 
-  ${pc.cyan('●')} Focus on missing tables only:
+  ${pc.cyan('●')} CLI mode - Focus on missing tables only:
     ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --onlyMissingTables')}
 
-  ${pc.cyan('●')} Track schema evolution over time:
+  ${pc.cyan('●')} CLI mode - Track schema evolution over time:
     ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --saveHistory')}
     ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --compareWith db-schema-diff-2025-01-05.json')}
 
-  ${pc.cyan('●')} Show only critical breaking changes:
+  ${pc.cyan('●')} CLI mode - Show only critical breaking changes:
     ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --criticalOnly')}
 
-  ${pc.cyan('●')} Generate full database dumps for local cloning:
+  ${pc.cyan('●')} CLI mode - Generate full database dumps:
     ${pc.dim('$ bun run compare-db-schemas.ts -c db-config.json --generateFullMigrations -d ./migrations')}
 
 ${pc.bold(pc.magenta('⚙️  CONFIG FILE FORMAT'))} ${pc.gray('(db-config.json):')}
@@ -240,7 +268,7 @@ ${pc.bold(pc.green('✨ FEATURES:'))}
 
 `);
 
-  p.outro(pc.dim('Run without arguments for interactive mode'));
+  p.outro(pc.green('💡 Tip: Run without arguments for interactive mode with smart defaults!'));
 }
 
 // Load config from file

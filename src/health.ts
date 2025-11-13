@@ -476,8 +476,8 @@ function generatePoliciesSQL(
     sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ENABLE ROW LEVEL SECURITY;\n\n`;
 
     for (const policy of tableInfo.policies) {
-      const roles = Array.isArray(policy.roles) ? policy.roles : [];
-      const rolesStr = roles.length > 0 ? roles.join(', ') : 'public';
+      const roles = Array.isArray(policy.roles) && policy.roles.length > 0 ? policy.roles : ['public'];
+      const rolesStr = roles.join(', ');
 
       sql += `CREATE POLICY "${policy.policy_name}"\n`;
       sql += `  ON "${tableRef.schema}"."${tableRef.table}"\n`;
@@ -512,8 +512,8 @@ function generatePoliciesSQL(
     sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ENABLE ROW LEVEL SECURITY;\n\n`;
 
     for (const policy of missingPolicies) {
-      const roles = Array.isArray(policy.roles) ? policy.roles : [];
-      const rolesStr = roles.length > 0 ? roles.join(', ') : 'public';
+      const roles = Array.isArray(policy.roles) && policy.roles.length > 0 ? policy.roles : ['public'];
+      const rolesStr = roles.join(', ');
 
       sql += `CREATE POLICY "${policy.policy_name}"\n`;
       sql += `  ON "${table.table_schema}"."${table.table_name}"\n`;
@@ -1009,8 +1009,8 @@ function generateMigrationSQL(
         sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ENABLE ROW LEVEL SECURITY;\n\n`;
 
         for (const policy of tableInfo.policies) {
-          const roles = Array.isArray(policy.roles) ? policy.roles : [];
-          const rolesStr = roles.length > 0 ? roles.join(', ') : 'public';
+          const roles = Array.isArray(policy.roles) && policy.roles.length > 0 ? policy.roles : ['public'];
+          const rolesStr = roles.join(', ');
 
           sql += `-- Policy: ${policy.policy_name}\n`;
           sql += `CREATE POLICY "${policy.policy_name}"\n`;
@@ -1143,8 +1143,8 @@ function generateMigrationSQL(
         sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ENABLE ROW LEVEL SECURITY;\n\n`;
 
         for (const policy of missingPolicies) {
-          const roles = Array.isArray(policy.roles) ? policy.roles : [];
-          const rolesStr = roles.length > 0 ? roles.join(', ') : 'public';
+          const roles = Array.isArray(policy.roles) && policy.roles.length > 0 ? policy.roles : ['public'];
+          const rolesStr = roles.join(', ');
 
           sql += `CREATE POLICY "${policy.policy_name}"\n`;
           sql += `  ON "${table.table_schema}"."${table.table_name}"\n`;

@@ -495,7 +495,7 @@ async function fetchAllSchemas(
       table.policies.push({
         policy_name: row.policy_name,
         permissive: row.permissive,
-        roles: Array.isArray(row.roles) ? row.roles : (row.roles ? [row.roles] : []),
+        roles: parsePostgresArray(row.roles),
         cmd: row.cmd,
         qual: row.qual,
         with_check: row.with_check,

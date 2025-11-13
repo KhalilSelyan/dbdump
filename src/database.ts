@@ -91,16 +91,21 @@ async function fetchAllSchemas(
   connectionUrl: string,
   schemas: string[],
   excludeTables: string[],
-  dbLabel: string
+  dbLabel: string,
+  silent: boolean = false
 ): Promise<SchemaMetadata> {
   const client = new Client({ connectionString: connectionUrl });
 
+  const log = (msg: string) => {
+    if (!silent) process.stdout.write(msg);
+  };
+
   try {
-    process.stdout.write(`  Connecting to ${dbLabel}...`);
+    log(`  Connecting to ${dbLabel}...`);
     await withRetry(async () => {
       await client.connect();
     }, `Connect to ${dbLabel}`);
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Query to get all tables and their columns across all schemas
     const query = `
@@ -134,12 +139,12 @@ async function fetchAllSchemas(
     `;
 
     const params = [schemas, ...excludeTables];
-    process.stdout.write(`  Querying schema information...`);
+    log(`  Querying schema information...`);
     const result = await client.query(query, params);
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Organize results by table
-    process.stdout.write(
+    log(
       `  Processing ${result.rows.length} column definitions...`
     );
     const tables = new Map<string, TableInfo>();
@@ -171,10 +176,10 @@ async function fetchAllSchemas(
         numeric_scale: row.numeric_scale,
       });
     }
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch indexes
-    process.stdout.write(`  Fetching indexes...`);
+    log(`  Fetching indexes...`);
     const indexQuery = `
       SELECT
         schemaname as table_schema,
@@ -244,10 +249,10 @@ async function fetchAllSchemas(
         index_type: indexType,
       });
     }
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch foreign keys
-    process.stdout.write(`  Fetching foreign keys...`);
+    log(`  Fetching foreign keys...`);
     const fkQuery = `
       SELECT
         tc.table_schema,
@@ -292,10 +297,10 @@ async function fetchAllSchemas(
         on_update: row.on_update,
       });
     }
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch check constraints
-    process.stdout.write(`  Fetching constraints...`);
+    log(`  Fetching constraints...`);
     const constraintQuery = `
       SELECT
         tc.table_schema,
@@ -359,10 +364,10 @@ async function fetchAllSchemas(
         columns: columns,
       });
     }
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch sequences used by tables
-    process.stdout.write(`  Fetching sequences...`);
+    log(`  Fetching sequences...`);
     const sequenceQuery = `
       SELECT DISTINCT
         s.sequence_schema,
@@ -406,10 +411,10 @@ async function fetchAllSchemas(
         });
       }
     }
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch triggers
-    process.stdout.write(`  Fetching triggers...`);
+    log(`  Fetching triggers...`);
     const triggerQuery = `
       SELECT
         t.trigger_schema as table_schema,
@@ -438,10 +443,10 @@ async function fetchAllSchemas(
         action_statement: row.action_statement,
       });
     }
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch RLS policies
-    process.stdout.write(`  Fetching RLS policies...`);
+    log(`  Fetching RLS policies...`);
     const policyQuery = `
       SELECT
         schemaname as table_schema,
@@ -477,10 +482,10 @@ async function fetchAllSchemas(
         with_check: row.with_check,
       });
     }
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch ENUM types used by these schemas
-    process.stdout.write(`  Fetching ENUM types...`);
+    log(`  Fetching ENUM types...`);
     const enumQuery = `
       SELECT
         n.nspname as schema,
@@ -510,10 +515,10 @@ async function fetchAllSchemas(
       enumMap.get(key)!.values.push(row.label);
     }
     const enums: EnumTypeInfo[] = Array.from(enumMap.values());
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch installed extensions
-    process.stdout.write(`  Fetching extensions...`);
+    log(`  Fetching extensions...`);
     const extensionQuery = `
       SELECT
         e.extname as name,
@@ -529,10 +534,10 @@ async function fetchAllSchemas(
       name: row.name,
       schema: row.schema
     }));
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     // Fetch functions
-    process.stdout.write(`  Fetching functions...`);
+    log(`  Fetching functions...`);
     const functionQuery = `
       SELECT
         n.nspname as schema,
@@ -559,7 +564,7 @@ async function fetchAllSchemas(
       return_type: row.return_type,
       argument_types: row.argument_types,
     }));
-    console.log(" ✓");
+    if (!silent) console.log(" ✓");
 
     return { tables, enums, extensions, functions };
   } finally {

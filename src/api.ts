@@ -307,19 +307,21 @@ export async function generateMigration(
     allSchemas = allSchemas.filter(schema => !options.skipSchemas!.includes(schema));
   }
 
-  // Fetch metadata
+  // Fetch metadata (silent mode for API usage)
   const sourceMetadata = await fetchAllSchemas(
     options.sourceUrl,
     allSchemas,
     options.excludeTables || [],
-    "source"
+    "source",
+    true // silent = true for API
   );
 
   const targetMetadata = await fetchAllSchemas(
     options.targetUrl,
     allSchemas,
     options.excludeTables || [],
-    "target"
+    "target",
+    true // silent = true for API
   );
 
   // Compare schemas
@@ -603,12 +605,13 @@ export async function generateFullDump(
     allSchemas = allSchemas.filter(schema => !options.skipSchemas!.includes(schema));
   }
 
-  // Fetch metadata
+  // Fetch metadata (silent mode for API usage)
   const metadata = await fetchAllSchemas(
     options.dbUrl,
     allSchemas,
     options.excludeTables || [],
-    "source"
+    "source",
+    true // silent = true for API
   );
 
   // Handle JSON format output
@@ -698,7 +701,8 @@ export async function compareWithHistory(
     currentDbUrl,
     allSchemas,
     options.excludeTables || [],
-    "current"
+    "current",
+    true // silent = true for API
   );
 
   // Reconstruct metadata from history (simplified - would need full reconstruction)

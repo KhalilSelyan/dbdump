@@ -198,9 +198,39 @@ async function fetchAllSchemas(
       const isPrimary = row.indexdef.includes("PRIMARY KEY");
       const isUnique = row.indexdef.includes("UNIQUE") || isPrimary;
 
-      // Extract columns from index definition
-      const columnsMatch = row.indexdef.match(/\(([^)]+)\)/);
-      const columns = columnsMatch ? columnsMatch[1].split(',').map((c: string) => c.trim()) : [];
+      // Extract columns/expressions from index definition
+      // Need to handle nested parentheses for functional indexes like: lower((wallet_address)::text)
+      // Find the opening paren after table name, then match all content until the balanced closing paren
+      const indexDefAfterTable = row.indexdef.substring(row.indexdef.lastIndexOf(' ON '));
+      const firstParenIndex = indexDefAfterTable.indexOf('(');
+
+      let columns: string[] = [];
+      if (firstParenIndex !== -1) {
+        // Find the matching closing parenthesis by counting parens
+        let parenCount = 0;
+        let endIndex = -1;
+        for (let i = firstParenIndex; i < indexDefAfterTable.length; i++) {
+          if (indexDefAfterTable[i] === '(') parenCount++;
+          if (indexDefAfterTable[i] === ')') parenCount--;
+          if (parenCount === 0) {
+            endIndex = i;
+            break;
+          }
+        }
+
+        if (endIndex !== -1) {
+          const columnsStr = indexDefAfterTable.substring(firstParenIndex + 1, endIndex);
+          // For functional indexes, keep the full expression; for regular columns, split by comma
+          // If it contains function calls (has unmatched parens or ::), treat as single expression
+          if (columnsStr.includes('(') || columnsStr.includes('::')) {
+            // Keep full expression for functional indexes
+            columns = [columnsStr.trim()];
+          } else {
+            // Split by comma for multi-column indexes
+            columns = columnsStr.split(',').map((c: string) => c.trim());
+          }
+        }
+      }
 
       // Determine index type (btree, hash, gin, gist, etc.)
       const typeMatch = row.indexdef.match(/USING (\w+)/);
@@ -485,14 +515,20 @@ async function fetchAllSchemas(
     // Fetch installed extensions
     process.stdout.write(`  Fetching extensions...`);
     const extensionQuery = `
-      SELECT extname
-      FROM pg_extension
-      WHERE extname NOT IN ('plpgsql')
-      ORDER BY extname;
+      SELECT
+        e.extname as name,
+        n.nspname as schema
+      FROM pg_extension e
+      JOIN pg_namespace n ON n.oid = e.extnamespace
+      WHERE e.extname NOT IN ('plpgsql')
+      ORDER BY e.extname;
     `;
 
     const extensionResult = await client.query(extensionQuery);
-    const extensions: string[] = extensionResult.rows.map(row => row.extname);
+    const extensions: ExtensionInfo[] = extensionResult.rows.map(row => ({
+      name: row.name,
+      schema: row.schema
+    }));
     console.log(" ✓");
 
     // Fetch functions

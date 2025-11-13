@@ -355,15 +355,52 @@ function generateExtensionsEnumsFunctionsSQL(
   sql += `-- Foundation types and functions (no dependencies)\n`;
   sql += `-- ============================================================\n\n`;
 
+  // Schemas - Extract all non-default schemas used in the database
+  const schemas = new Set<string>();
+
+  // Add schemas from tables
+  for (const table of sourceMetadata.tables.values()) {
+    if (table.table_schema && table.table_schema !== 'public') {
+      schemas.add(table.table_schema);
+    }
+  }
+
+  // Add schemas from enums
+  for (const enumInfo of sourceMetadata.enums) {
+    if (enumInfo.schema && enumInfo.schema !== 'public') {
+      schemas.add(enumInfo.schema);
+    }
+  }
+
+  // Add schemas from functions
+  for (const funcInfo of sourceMetadata.functions) {
+    if (funcInfo.schema && funcInfo.schema !== 'public') {
+      schemas.add(funcInfo.schema);
+    }
+  }
+
+  // Filter out system schemas
+  const systemSchemas = ['pg_catalog', 'information_schema', 'pg_toast'];
+  const userSchemas = Array.from(schemas).filter(s => !systemSchemas.includes(s)).sort();
+
+  if (userSchemas.length > 0) {
+    sql += `-- Schemas\n`;
+    sql += `-- Create non-default schemas before creating objects in them\n`;
+    for (const schema of userSchemas) {
+      sql += `CREATE SCHEMA IF NOT EXISTS "${schema}";\n`;
+    }
+    sql += `\n`;
+  }
+
   // Extensions
-  const sourceExtensions = new Set(sourceMetadata.extensions);
-  const targetExtensions = new Set(targetMetadata.extensions);
-  const missingExtensions = Array.from(sourceExtensions).filter(ext => !targetExtensions.has(ext));
+  const sourceExtensions = new Map(sourceMetadata.extensions.map(e => [e.name, e]));
+  const targetExtensions = new Map(targetMetadata.extensions.map(e => [e.name, e]));
+  const missingExtensions = Array.from(sourceExtensions.values()).filter(ext => !targetExtensions.has(ext.name));
 
   if (missingExtensions.length > 0) {
     sql += `-- Extensions\n`;
     for (const ext of missingExtensions) {
-      sql += `CREATE EXTENSION IF NOT EXISTS "${ext}";\n`;
+      sql += `CREATE EXTENSION IF NOT EXISTS "${ext.name}" WITH SCHEMA "${ext.schema}";\n`;
     }
     sql += `\n`;
   }
@@ -601,6 +638,20 @@ function generateTablesSQL(
   return hasTables ? sql : `-- No tables to create or modify\n\n`;
 }
 
+/**
+ * Format index column/expression for SQL
+ * Don't quote functional expressions (contain parens or type casts)
+ * Quote regular column names
+ */
+function formatIndexColumn(col: string): string {
+  // If it's a functional expression (contains parens or type cast), don't quote
+  if (col.includes('(') || col.includes('::') || col.includes(' ')) {
+    return col;
+  }
+  // Regular column name - quote it
+  return `"${col}"`;
+}
+
 // Helper: Generate Indexes SQL
 function generateIndexesSQL(
   diff: SchemaDiff,
@@ -624,10 +675,10 @@ function generateIndexesSQL(
     sql += `-- Indexes for table: ${tableRef.schema}.${tableRef.table}\n`;
     for (const idx of tableInfo.indexes) {
       if (idx.is_primary) {
-        sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD PRIMARY KEY (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+        sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD PRIMARY KEY (${idx.columns.map(c => formatIndexColumn(c)).join(', ')});\n`;
       } else {
         const uniqueStr = idx.is_unique ? 'UNIQUE ' : '';
-        sql += `CREATE ${uniqueStr}INDEX IF NOT EXISTS "${idx.index_name}" ON "${tableRef.schema}"."${tableRef.table}" USING ${idx.index_type} (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+        sql += `CREATE ${uniqueStr}INDEX IF NOT EXISTS "${idx.index_name}" ON "${tableRef.schema}"."${tableRef.table}" USING ${idx.index_type} (${idx.columns.map(c => formatIndexColumn(c)).join(', ')});\n`;
       }
     }
     sql += `\n`;
@@ -640,10 +691,10 @@ function generateIndexesSQL(
       sql += `-- Add indexes to existing table: ${table.table_schema}.${table.table_name}\n`;
       for (const idx of table.indexesOnlyInSource) {
         if (idx.is_primary) {
-          sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD PRIMARY KEY (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+          sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD PRIMARY KEY (${idx.columns.map(c => formatIndexColumn(c)).join(', ')});\n`;
         } else {
           const uniqueStr = idx.is_unique ? 'UNIQUE ' : '';
-          sql += `CREATE ${uniqueStr}INDEX IF NOT EXISTS "${idx.index_name}" ON "${table.table_schema}"."${table.table_name}" USING ${idx.index_type} (${idx.columns.map(c => `"${c}"`).join(', ')});\n`;
+          sql += `CREATE ${uniqueStr}INDEX IF NOT EXISTS "${idx.index_name}" ON "${table.table_schema}"."${table.table_name}" USING ${idx.index_type} (${idx.columns.map(c => formatIndexColumn(c)).join(', ')});\n`;
         }
       }
       sql += `\n`;
@@ -689,6 +740,8 @@ function generateConstraintsForeignKeysSQL(
     }
 
     // Constraints (CHECK and UNIQUE)
+    // Note: UNIQUE constraints are often implemented as indexes, so we skip them here
+    // to avoid duplication with the indexes created in generateIndexesSQL()
     for (const constraint of tableInfo.constraints) {
       if (constraint.constraint_type === 'CHECK' && constraint.check_clause) {
         const checkClause = constraint.check_clause.trim().startsWith('(')
@@ -696,8 +749,17 @@ function generateConstraintsForeignKeysSQL(
           : `(${constraint.check_clause})`;
         sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD CONSTRAINT "${constraint.constraint_name}" CHECK ${checkClause};\n`;
       } else if (constraint.constraint_type === 'UNIQUE' && constraint.columns && Array.isArray(constraint.columns) && constraint.columns.length > 0) {
-        const columnList = constraint.columns.map(c => `"${c}"`).join(', ');
-        sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD CONSTRAINT "${constraint.constraint_name}" UNIQUE (${columnList});\n`;
+        // Check if this UNIQUE constraint already exists as a UNIQUE INDEX
+        const hasMatchingIndex = tableInfo.indexes.some(idx =>
+          idx.is_unique &&
+          idx.index_name === constraint.constraint_name
+        );
+
+        // Skip if already created as an index (indexes are preferred for unique constraints)
+        if (!hasMatchingIndex) {
+          const columnList = constraint.columns.map(c => `"${c}"`).join(', ');
+          sql += `ALTER TABLE "${tableRef.schema}"."${tableRef.table}" ADD CONSTRAINT "${constraint.constraint_name}" UNIQUE (${columnList});\n`;
+        }
       }
     }
     sql += `\n`;
@@ -731,8 +793,19 @@ function generateConstraintsForeignKeysSQL(
           : `(${constraint.check_clause})`;
         sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD CONSTRAINT "${constraint.constraint_name}" CHECK ${checkClause};\n`;
       } else if (constraint.constraint_type === 'UNIQUE' && constraint.columns && Array.isArray(constraint.columns) && constraint.columns.length > 0) {
-        const columnList = constraint.columns.map(c => `"${c}"`).join(', ');
-        sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD CONSTRAINT "${constraint.constraint_name}" UNIQUE (${columnList});\n`;
+        // Check if this UNIQUE constraint already exists as a UNIQUE INDEX
+        const tableKey = `${table.table_schema}.${table.table_name}`;
+        const tableInfo = schemaMap.get(tableKey);
+        const hasMatchingIndex = tableInfo?.indexes.some(idx =>
+          idx.is_unique &&
+          idx.index_name === constraint.constraint_name
+        );
+
+        // Skip if already created as an index (indexes are preferred for unique constraints)
+        if (!hasMatchingIndex) {
+          const columnList = constraint.columns.map(c => `"${c}"`).join(', ');
+          sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD CONSTRAINT "${constraint.constraint_name}" UNIQUE (${columnList});\n`;
+        }
       }
     }
     sql += `\n`;

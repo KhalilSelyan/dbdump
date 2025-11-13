@@ -94,6 +94,11 @@ export interface EnumTypeInfo {
   values: string[];
 }
 
+export interface ExtensionInfo {
+  name: string;
+  schema: string;
+}
+
 export interface FunctionInfo {
   schema: string;
   name: string;
@@ -122,7 +127,7 @@ export interface TableInfo {
 export interface SchemaMetadata {
   tables: Map<string, TableInfo>;
   enums: EnumTypeInfo[];
-  extensions: string[];
+  extensions: ExtensionInfo[];
   functions: FunctionInfo[];
 }
 

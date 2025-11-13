@@ -345,14 +345,14 @@ function formatColumnDefinition(col: ColumnInfo, includeDefault: boolean = true)
   return colDef;
 }
 
-// Helper: Generate Extensions, ENUMs, and Functions SQL
-function generateExtensionsEnumsFunctionsSQL(
+// Helper: Generate Extensions and ENUMs SQL (no functions - they go in file 8)
+function generateExtensionsEnumsSQL(
   sourceMetadata: SchemaMetadata,
   targetMetadata: SchemaMetadata
 ): string {
   let sql = `-- ============================================================\n`;
-  sql += `-- EXTENSIONS, ENUMS, AND FUNCTIONS\n`;
-  sql += `-- Foundation types and functions (no dependencies)\n`;
+  sql += `-- EXTENSIONS AND ENUMS\n`;
+  sql += `-- Foundation types (no table dependencies)\n`;
   sql += `-- ============================================================\n\n`;
 
   // Schemas - Extract all non-default schemas used in the database
@@ -434,7 +434,19 @@ function generateExtensionsEnumsFunctionsSQL(
     }
   }
 
-  // Functions
+  return sql || `-- No extensions or enums to create\n\n`;
+}
+
+// Helper: Generate Functions SQL (separate file after tables)
+function generateFunctionsSQL(
+  sourceMetadata: SchemaMetadata,
+  targetMetadata: SchemaMetadata
+): string {
+  let sql = `-- ============================================================\n`;
+  sql += `-- FUNCTIONS\n`;
+  sql += `-- Functions that may reference tables (created after tables)\n`;
+  sql += `-- ============================================================\n\n`;
+
   const sourceFunctions = new Map(sourceMetadata.functions.map(f => [`${f.schema}.${f.name}`, f]));
   const targetFunctions = new Map(targetMetadata.functions.map(f => [`${f.schema}.${f.name}`, f]));
   const missingFunctions: FunctionInfo[] = [];
@@ -452,7 +464,7 @@ function generateExtensionsEnumsFunctionsSQL(
     }
   }
 
-  return sql || `-- No extensions, enums, or functions to create\n\n`;
+  return sql || `-- No functions to create\n\n`;
 }
 
 // Helper: Generate Sequences SQL
@@ -983,27 +995,29 @@ function generateFullDatabaseSQL(
     functions: []
   };
 
-  const totalFiles = 7;
+  const totalFiles = 8;
 
   // Generate SQL for each file
   const files: Record<string, string> = {
-    '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(metadata, emptyMetadata),
+    '1-extensions-enums': header + generateExtensionsEnumsSQL(metadata, emptyMetadata),
     '2-sequences': header + generateSequencesSQL(fullDiff, metadata),
     '3-tables': header + generateTablesSQL(fullDiff, metadata, sortByDependencies, handleCircularDeps),
     '4-indexes': header + generateIndexesSQL(fullDiff, metadata),
     '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(fullDiff, metadata),
-    '6-triggers': header + generateTriggersSQL(fullDiff, metadata, emptyMetadata),
-    '7-policies': header + generatePoliciesSQL(fullDiff, metadata, emptyMetadata),
+    '6-functions': header + generateFunctionsSQL(metadata, emptyMetadata),
+    '7-triggers': header + generateTriggersSQL(fullDiff, metadata, emptyMetadata),
+    '8-policies': header + generatePoliciesSQL(fullDiff, metadata, emptyMetadata),
   };
 
   // Apply transaction wrapping if enabled
   if (transactionScope !== 'none') {
     const labels = [
-      'Extensions, ENUMs, and Functions',
+      'Extensions and ENUMs',
       'Sequences',
       'Tables',
       'Indexes',
       'Constraints and Foreign Keys',
+      'Functions',
       'Triggers',
       'RLS Policies'
     ];
@@ -1044,27 +1058,29 @@ function generateSplitMigrationSQL(
 
   const header = `-- Migration: ${direction}\n-- Generated: ${new Date().toLocaleString()}\n-- WARNING: Review carefully before executing!\n\n`;
 
-  const totalFiles = 7;
+  const totalFiles = 8;
 
   // Generate SQL for each file
   const files: Record<string, string> = {
-    '1-extensions-enums-functions': header + generateExtensionsEnumsFunctionsSQL(sourceMetadataToUse, targetMetadataToUse),
+    '1-extensions-enums': header + generateExtensionsEnumsSQL(sourceMetadataToUse, targetMetadataToUse),
     '2-sequences': header + generateSequencesSQL(diff, sourceMetadataToUse),
     '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse, sortByDependencies, handleCircularDeps),
     '4-indexes': header + generateIndexesSQL(diff, sourceMetadataToUse),
     '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(diff, sourceMetadataToUse, isSourceToTarget),
-    '6-triggers': header + generateTriggersSQL(diff, sourceMetadataToUse, targetMetadataToUse),
-    '7-policies': header + generatePoliciesSQL(diff, sourceMetadataToUse, targetMetadataToUse),
+    '6-functions': header + generateFunctionsSQL(sourceMetadataToUse, targetMetadataToUse),
+    '7-triggers': header + generateTriggersSQL(diff, sourceMetadataToUse, targetMetadataToUse),
+    '8-policies': header + generatePoliciesSQL(diff, sourceMetadataToUse, targetMetadataToUse),
   };
 
   // Apply transaction wrapping if enabled
   if (transactionScope !== 'none') {
     const labels = [
-      'Extensions, ENUMs, and Functions',
+      'Extensions and ENUMs',
       'Sequences',
       'Tables',
       'Indexes',
       'Constraints and Foreign Keys',
+      'Functions',
       'Triggers',
       'RLS Policies'
     ];
@@ -1094,13 +1110,14 @@ This directory contains database migration scripts organized into subdirectories
 \`\`\`
 .
 ├── diff-source-to-target/          # Migrations to sync target with source
-│   ├── 1-extensions-enums-functions.sql
+│   ├── 1-extensions-enums.sql
 │   ├── 2-sequences.sql
 │   ├── 3-tables.sql
 │   ├── 4-indexes.sql
 │   ├── 5-constraints-foreign-keys.sql
-│   ├── 6-triggers.sql
-│   └── 7-policies.sql
+│   ├── 6-functions.sql
+│   ├── 7-triggers.sql
+│   └── 8-policies.sql
 ├── diff-target-to-source/          # Migrations to sync source with target
 │   └── (same structure as above)
 ├── full-source/                    # Complete source DB schema (if generated)
@@ -1115,10 +1132,9 @@ This directory contains database migration scripts organized into subdirectories
 ### diff-source-to-target/
 These scripts migrate changes FROM the source database TO the target database:
 
-1. \`1-extensions-enums-functions.sql\`
+1. \`1-extensions-enums.sql\`
    - Creates PostgreSQL extensions (uuid-ossp, postgis, etc.)
    - Creates ENUM types
-   - Creates functions needed by triggers
    - **Dependencies:** None
 
 2. \`2-sequences.sql\`
@@ -1141,14 +1157,18 @@ These scripts migrate changes FROM the source database TO the target database:
    - Creates foreign key constraints
    - **Dependencies:** Tables, possibly other tables (for FKs)
 
-6. \`6-triggers.sql\`
-   - Creates triggers on tables
-   - **Dependencies:** Tables, Functions
+6. \`6-functions.sql\`
+   - Creates database functions
+   - **Dependencies:** Tables (functions often reference tables)
 
-7. \`7-policies.sql\`
+7. \`7-triggers.sql\`
+   - Creates triggers on tables
+   - **Dependencies:** Tables, Functions (triggers call functions)
+
+8. \`8-policies.sql\`
    - Enables Row Level Security (RLS)
    - Creates RLS policies
-   - **Dependencies:** Tables
+   - **Dependencies:** Tables, Functions (policies may use functions in USING clauses)
 
 ### diff-target-to-source/
 These scripts migrate changes FROM the target database TO the source database (reverse direction):
@@ -1189,13 +1209,14 @@ Execute files in numbered order:
 \`\`\`bash
 # Example: Migrating source → target
 cd diff-source-to-target
-psql $TARGET_DB_URL -f 1-extensions-enums-functions.sql
+psql $TARGET_DB_URL -f 1-extensions-enums.sql
 psql $TARGET_DB_URL -f 2-sequences.sql
 psql $TARGET_DB_URL -f 3-tables.sql
 psql $TARGET_DB_URL -f 4-indexes.sql
 psql $TARGET_DB_URL -f 5-constraints-foreign-keys.sql
-psql $TARGET_DB_URL -f 6-triggers.sql
-psql $TARGET_DB_URL -f 7-policies.sql
+psql $TARGET_DB_URL -f 6-functions.sql
+psql $TARGET_DB_URL -f 7-triggers.sql
+psql $TARGET_DB_URL -f 8-policies.sql
 \`\`\`
 
 ### Option 3: Selective Migration
@@ -1751,8 +1772,8 @@ function generateRollbackSQL(
 -- To enable actual execution, run with: --cleanupDryRun=false
 --
 -- Execute files in THIS ORDER (reverse of migration):
---   7-policies.sql → 6-triggers.sql → 5-constraints-foreign-keys.sql
---   → 4-indexes.sql → 3-tables.sql → 2-sequences.sql → 1-extensions-enums-functions.sql
+--   8-policies.sql → 7-triggers.sql → 6-functions.sql → 5-constraints-foreign-keys.sql
+--   → 4-indexes.sql → 3-tables.sql → 2-sequences.sql → 1-extensions-enums.sql
 --
 -- ============================================================\n\n`;
 
@@ -1899,11 +1920,11 @@ function generateRollbackSQL(
     }
   }
 
-  // 1. Extensions, ENUMs, Functions (least destructive, but still careful)
-  let extensionsSQL = '';
-
   // Determine which metadata to check against (opposite of rollback metadata)
   const comparisonMetadata = isSourceToTarget ? targetMetadata : sourceMetadata;
+
+  // 6. Functions (drop functions that reference tables, must be dropped after triggers/policies)
+  let functionsSQL = '';
 
   // Drop functions
   for (const func of metadataToRollback.functions) {
@@ -1912,13 +1933,16 @@ function generateRollbackSQL(
     );
 
     if (!existsInComparison) {
-      extensionsSQL += `${commentPrefix}DROP FUNCTION IF EXISTS "${func.schema}"."${func.name}"(${func.argument_types}) CASCADE;\n`;
+      functionsSQL += `${commentPrefix}DROP FUNCTION IF EXISTS "${func.schema}"."${func.name}"(${func.argument_types}) CASCADE;\n`;
     }
   }
 
   if (metadataToRollback.functions.length > 0) {
-    extensionsSQL += '\n';
+    functionsSQL += '\n';
   }
+
+  // 1. Extensions and ENUMs
+  let extensionsSQL = '';
 
   // Drop ENUMs
   for (const enumType of metadataToRollback.enums) {
@@ -1942,20 +1966,21 @@ function generateRollbackSQL(
     extensionsSQL += `-- Uncomment only if you're certain:\n`;
 
     for (const ext of metadataToRollback.extensions) {
-      extensionsSQL += `-- ${commentPrefix}DROP EXTENSION IF EXISTS "${ext}" CASCADE;\n`;
+      extensionsSQL += `-- ${commentPrefix}DROP EXTENSION IF EXISTS "${ext.name}" CASCADE;\n`;
     }
     extensionsSQL += '\n';
   }
 
-  // Build files in reverse order (7→1)
+  // Build files matching migration order (same numbers, but DROP instead of CREATE)
   const files = {
-    '7-policies': header + (policiesSQL || '-- No policies to rollback\n'),
-    '6-triggers': header + (triggersSQL || '-- No triggers to rollback\n'),
+    '8-policies': header + (policiesSQL || '-- No policies to rollback\n'),
+    '7-triggers': header + (triggersSQL || '-- No triggers to rollback\n'),
+    '6-functions': header + (functionsSQL || '-- No functions to rollback\n'),
     '5-constraints-foreign-keys': header + (constraintsSQL || '-- No constraints to rollback\n'),
     '4-indexes': header + (indexesSQL || '-- No indexes to rollback\n'),
     '3-tables': header + (tablesSQL || '-- No tables or columns to rollback\n'),
     '2-sequences': header + (sequencesSQL || '-- No sequences to rollback\n'),
-    '1-extensions-enums-functions': header + (extensionsSQL || '-- No extensions/enums/functions to rollback\n'),
+    '1-extensions-enums': header + (extensionsSQL || '-- No extensions/enums to rollback\n'),
   };
 
   return files as SplitMigrationFiles;

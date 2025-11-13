@@ -276,6 +276,7 @@ export interface ConfigFile {
   target?: string;
   excludeTables?: string[];
   skipSchemas?: string[];
+  skipExtensions?: string[];
   outputDir?: string;
   // Priority 2: Enhanced config options
   incrementalMode?: boolean;
@@ -294,6 +295,7 @@ export interface CLIArgs {
   outputDir?: string;
   excludeTables?: string[];
   skipSchemas?: string[];
+  skipExtensions?: string[];
   onlyMissingTables?: boolean;
   onlyColumnDiffs?: boolean;
   criticalOnly?: boolean;
@@ -323,11 +325,12 @@ export interface FilterOptions {
 // ============================================================
 
 export interface SplitMigrationFiles {
-  '1-extensions-enums-functions': string;
+  '1-extensions-enums': string;
   '2-sequences': string;
   '3-tables': string;
   '4-indexes': string;
   '5-constraints-foreign-keys': string;
-  '6-triggers': string;
-  '7-policies': string;
+  '6-functions': string;
+  '7-triggers': string;
+  '8-policies': string;
 }

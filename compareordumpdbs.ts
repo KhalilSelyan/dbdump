@@ -187,6 +187,7 @@ async function main() {
   let targetUrl: string | undefined;
   let excludeTables: string[];
   let skipSchemas: string[];
+  let skipExtensions: string[];
   let outputDir: string;
 
   // Load from config file if provided
@@ -198,6 +199,7 @@ async function main() {
       config.excludeTables ||
       []) as string[];
     skipSchemas = (args.skipSchemas || config.skipSchemas || []) as string[];
+    skipExtensions = (args.skipExtensions || config.skipExtensions || []) as string[];
     outputDir = (args.outputDir || config.outputDir || ".") as string;
 
     // Merge config values with CLI args (CLI args take precedence)
@@ -223,6 +225,7 @@ async function main() {
     targetUrl = args.target as string | undefined;
     excludeTables = (args.excludeTables || []) as string[];
     skipSchemas = (args.skipSchemas || []) as string[];
+    skipExtensions = (args.skipExtensions || []) as string[];
     outputDir = (args.outputDir || ".") as string;
   }
 
@@ -304,7 +307,9 @@ async function main() {
     sourceUrl,
     allSchemas,
     excludeTables,
-    "source"
+    "source",
+    false,
+    skipExtensions
   );
   s3.stop(`Source: ${pc.yellow(String(sourceMetadata.tables.size))} tables, ${pc.yellow(String(sourceMetadata.enums.length))} enums, ${pc.yellow(String(sourceMetadata.functions.length))} functions`);
 
@@ -331,7 +336,9 @@ async function main() {
       targetUrl!,
       allSchemas,
       excludeTables,
-      "target"
+      "target",
+      false,
+      skipExtensions
     );
     s4.stop(`Target: ${pc.yellow(String(targetMetadata.tables.size))} tables, ${pc.yellow(String(targetMetadata.enums.length))} enums, ${pc.yellow(String(targetMetadata.functions.length))} functions`);
 

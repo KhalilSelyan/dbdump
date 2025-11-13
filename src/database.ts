@@ -92,7 +92,8 @@ async function fetchAllSchemas(
   schemas: string[],
   excludeTables: string[],
   dbLabel: string,
-  silent: boolean = false
+  silent: boolean = false,
+  skipExtensions: string[] = []
 ): Promise<SchemaMetadata> {
   const client = new Client({ connectionString: connectionUrl });
 
@@ -530,10 +531,16 @@ async function fetchAllSchemas(
     `;
 
     const extensionResult = await client.query(extensionQuery);
-    const extensions: ExtensionInfo[] = extensionResult.rows.map(row => ({
+    let extensions: ExtensionInfo[] = extensionResult.rows.map(row => ({
       name: row.name,
       schema: row.schema
     }));
+
+    // Filter out skipped extensions
+    if (skipExtensions.length > 0) {
+      extensions = extensions.filter(ext => !skipExtensions.includes(ext.name));
+    }
+
     if (!silent) console.log(" ✓");
 
     // Fetch functions

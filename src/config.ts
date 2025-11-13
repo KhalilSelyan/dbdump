@@ -36,6 +36,11 @@ function parseArguments() {
         multiple: true,
         short: "x",
       },
+      skipExtensions: {
+        type: "string",
+        multiple: true,
+        short: "X",
+      },
       onlyMissingTables: {
         type: "boolean",
       },
@@ -157,6 +162,7 @@ ${pc.bold(pc.blue('📁 OUTPUT OPTIONS:'))}
 ${pc.bold(pc.blue('🔍 FILTER OPTIONS:'))}
   ${pc.green('-e, --excludeTables')} <...>  Exclude specific tables from comparison
   ${pc.green('-x, --skipSchemas')} <...>    Skip entire schemas ${pc.gray('(e.g., extensions, graphql)')}
+  ${pc.green('-X, --skipExtensions')} <...> Skip specific extensions ${pc.gray('(e.g., hypopg, pg_cron)')}
   ${pc.green('--onlyMissingTables')}        Show only tables that exist in one DB but not the other
   ${pc.green('--onlyColumnDiffs')}          Show only column-level differences
   ${pc.green('--criticalOnly')}             Show only breaking changes ${pc.red('(type changes, nullability)')}
@@ -239,6 +245,7 @@ ${pc.bold(pc.magenta('⚙️  CONFIG FILE FORMAT'))} ${pc.gray('(db-config.json)
     "target": "postgresql://user:pass@host:port/dev_db",
     "excludeTables": ["migrations", "schema_migrations"],
     "skipSchemas": ["extensions", "graphql", "realtime"],
+    "skipExtensions": ["hypopg", "pg_cron", "supabase_vault"],
     "outputDir": "migrations"
   }`)}
 
@@ -247,6 +254,7 @@ ${pc.bold(pc.magenta('⚙️  CONFIG FILE FORMAT'))} ${pc.gray('(db-config.json)
     "source": "postgresql://user:pass@host:port/prod_db",
     "excludeTables": ["migrations", "schema_migrations"],
     "skipSchemas": ["extensions", "graphql", "realtime"],
+    "skipExtensions": ["hypopg", "pg_cron", "supabase_vault"],
     "outputDir": "dumps"
   }`)}
 

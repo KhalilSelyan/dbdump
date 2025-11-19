@@ -507,7 +507,8 @@ function generateTablesSQL(
   diff: SchemaDiff,
   sourceMetadata: SchemaMetadata,
   sortByDependencies: boolean = true,
-  handleCircularDeps: boolean = true
+  handleCircularDeps: boolean = true,
+  isSourceToTarget: boolean = true
 ): string {
   let sql = `-- ============================================================\n`;
   sql += `-- TABLES\n`;
@@ -630,11 +631,17 @@ function generateTablesSQL(
   }
 
   // Add missing columns to existing tables
+  // For source-to-target: add columns that exist in source but not in target
+  // For target-to-source: add columns that exist in target but not in source
   for (const table of diff.tablesInBoth) {
-    if (table.columnsOnlyInSource.length > 0) {
+    const columnsToAdd = isSourceToTarget ? table.columnsOnlyInSource : table.columnsOnlyInTarget;
+
+    console.log(`DEBUG [${isSourceToTarget ? 'source-to-target' : 'target-to-source'}]: table=${table.table_schema}.${table.table_name}, columnsOnlyInSource=${table.columnsOnlyInSource.length}, columnsOnlyInTarget=${table.columnsOnlyInTarget.length}, columnsToAdd=${columnsToAdd.length}`);
+
+    if (columnsToAdd.length > 0) {
       hasTables = true;
       sql += `-- Add columns to existing table: ${table.table_schema}.${table.table_name}\n`;
-      for (const col of table.columnsOnlyInSource) {
+      for (const col of columnsToAdd) {
         sql += `ALTER TABLE "${table.table_schema}"."${table.table_name}" ADD COLUMN IF NOT EXISTS ${formatColumnDefinition(col)};\n`;
       }
       sql += `\n`;
@@ -1001,9 +1008,9 @@ function generateFullDatabaseSQL(
   const files: Record<string, string> = {
     '1-extensions-enums': header + generateExtensionsEnumsSQL(metadata, emptyMetadata),
     '2-sequences': header + generateSequencesSQL(fullDiff, metadata),
-    '3-tables': header + generateTablesSQL(fullDiff, metadata, sortByDependencies, handleCircularDeps),
+    '3-tables': header + generateTablesSQL(fullDiff, metadata, sortByDependencies, handleCircularDeps, true),
     '4-indexes': header + generateIndexesSQL(fullDiff, metadata),
-    '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(fullDiff, metadata),
+    '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(fullDiff, metadata, true),
     '6-functions': header + generateFunctionsSQL(metadata, emptyMetadata),
     '7-triggers': header + generateTriggersSQL(fullDiff, metadata, emptyMetadata),
     '8-policies': header + generatePoliciesSQL(fullDiff, metadata, emptyMetadata),
@@ -1064,7 +1071,7 @@ function generateSplitMigrationSQL(
   const files: Record<string, string> = {
     '1-extensions-enums': header + generateExtensionsEnumsSQL(sourceMetadataToUse, targetMetadataToUse),
     '2-sequences': header + generateSequencesSQL(diff, sourceMetadataToUse),
-    '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse, sortByDependencies, handleCircularDeps),
+    '3-tables': header + generateTablesSQL(diff, sourceMetadataToUse, sortByDependencies, handleCircularDeps, isSourceToTarget),
     '4-indexes': header + generateIndexesSQL(diff, sourceMetadataToUse),
     '5-constraints-foreign-keys': header + generateConstraintsForeignKeysSQL(diff, sourceMetadataToUse, isSourceToTarget),
     '6-functions': header + generateFunctionsSQL(sourceMetadataToUse, targetMetadataToUse),

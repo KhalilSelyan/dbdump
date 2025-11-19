@@ -636,8 +636,6 @@ function generateTablesSQL(
   for (const table of diff.tablesInBoth) {
     const columnsToAdd = isSourceToTarget ? table.columnsOnlyInSource : table.columnsOnlyInTarget;
 
-    console.log(`DEBUG [${isSourceToTarget ? 'source-to-target' : 'target-to-source'}]: table=${table.table_schema}.${table.table_name}, columnsOnlyInSource=${table.columnsOnlyInSource.length}, columnsOnlyInTarget=${table.columnsOnlyInTarget.length}, columnsToAdd=${columnsToAdd.length}`);
-
     if (columnsToAdd.length > 0) {
       hasTables = true;
       sql += `-- Add columns to existing table: ${table.table_schema}.${table.table_name}\n`;
